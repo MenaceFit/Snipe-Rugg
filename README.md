@@ -15,28 +15,35 @@ Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─▶ Decoder
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for build order and current status.
 
-## Status: Phase 1 — Real-time core
+## Status: Phase 2 — Wallet tracker
 
-What exists today: WebSocket connectivity to Solana (native RPC + optional Helius
-Enhanced WS), automatic reconnect with resubscription, gap-recovery backfill over RPC
-HTTP, provider-agnostic event normalization, signature dedup, an async event bus, and
-per-stage latency telemetry. Wallet management, transaction decoding, buy/sell
-detection, Discord alerts, dev tracking, strategy/paper trading, and the dashboard are
-later phases — see the roadmap — and are not implemented yet.
+Phase 1 (WebSocket connectivity to Solana, reconnect/resubscribe, gap-recovery
+backfill, event normalization, dedup, latency telemetry) and Phase 2 (transaction
+decoding, buy/sell/transfer/mint/burn/... classification, a SQLAlchemy-backed
+wallet/watchlist store, and a Discord bot with `/wallet` and `/watchlist` slash
+commands that alert on tracked-wallet activity) are done. Token/dev/graph/strategy
+tracking and paper trading are later phases — see the roadmap — and aren't
+implemented yet.
 
 ## Quickstart
 
 ```bash
 uv venv --python 3.12 .venv
 uv pip install -e ".[dev]" --python .venv/bin/python
-cp .env.example .env   # fill in SOLANA_RPC_WS / HELIUS_API_KEY as desired
+cp .env.example .env   # fill in SOLANA_RPC_WS / HELIUS_API_KEY / DISCORD_TOKEN as desired
 
-# Run the Phase 1 demo against real mainnet: connects, subscribes, logs every
-# normalized event (with measured latency) to stdout as structured JSON.
+# Phase 1 demo: connects, subscribes, logs every normalized event (with
+# measured latency) to stdout as structured JSON. No Discord/DB needed.
 .venv/bin/python -m snipe_rugg.main --wallet <SOME_WALLET_ADDRESS>
 
+# The real bot: Phase 1 streaming + Phase 2 tracking/decoding/alerting, live on
+# Discord. Needs DISCORD_TOKEN and DISCORD_ALERT_CHANNEL_ID in .env.
+.venv/bin/python -m snipe_rugg.bot_main
+
 # Tests (no network required — WebSocket behavior is tested against a local
-# in-process mock server, including real reconnect/resubscribe)
+# in-process mock server including real reconnect/resubscribe; the DB layer
+# runs against sqlite+aiosqlite; Discord command logic is tested as plain
+# async methods, independent of a live gateway connection)
 .venv/bin/pytest
 ```
 
@@ -75,7 +82,24 @@ src/snipe_rugg/
   ingestion/
     pipeline.py              # ingestion layer + event queue
     gap_recovery.py           # post-reconnect backfill
-  main.py                     # Phase 1 demo entrypoint
+  decoder/
+    transaction_decoder.py    # raw getTransaction(jsonParsed) -> DecodedTransaction
+    classifier.py              # DecodedTransaction + wallet -> BUY/SELL/TRANSFER/...
+    constants.py                # known program IDs/mints (labeling only)
+  db/
+    base.py                     # async engine/session
+    models.py                    # tracked_wallets, wallet_groups, token_trades, ...
+    repository.py                 # the only thing that touches a session directly
+  tracking/
+    wallet_tracker.py             # event -> decode -> classify -> persist -> alert
+  alerts/
+    embeds.py                     # Discord embed builders
+  discord_bot/
+    services.py                   # /wallet and /watchlist command logic (no discord.py)
+    bot.py                         # app_commands wiring
+    alert_sink.py                  # the concrete AlertSink that posts to a channel
+  main.py                         # Phase 1 demo entrypoint
+  bot_main.py                      # full Phase 1 + Phase 2 composition root
 tests/                        # pytest + pytest-asyncio, incl. a real mock WS server
 docs/                          # architecture, roadmap, provider matrix
 ```

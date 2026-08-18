@@ -1,0 +1,67 @@
+{
+  "slot": 300000004,
+  "blockTime": 1755000090,
+  "version": 0,
+  "transaction": {
+    "signatures": ["TokenCreateTxSignature1111111111111111111111111111111111"],
+    "message": {
+      "accountKeys": [
+        { "pubkey": "DevWallet111111111111111111111111111111111", "signer": true, "writable": true, "source": "transaction" },
+        { "pubkey": "NewMintAccount111111111111111111111111111", "signer": true, "writable": true, "source": "transaction" },
+        { "pubkey": "DevWalletTokenAccount11111111111111111111", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "signer": false, "writable": false, "source": "transaction" }
+      ],
+      "recentBlockhash": "11111111111111111111111111111111111111111",
+      "instructions": [
+        {
+          "program": "spl-token",
+          "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "parsed": {
+            "type": "initializeMint2",
+            "info": {
+              "mint": "NewMintAccount111111111111111111111111111",
+              "decimals": 6,
+              "mintAuthority": "DevWallet111111111111111111111111111111111",
+              "freezeAuthority": "DevWallet111111111111111111111111111111111"
+            }
+          }
+        },
+        {
+          "program": "spl-token",
+          "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "parsed": {
+            "type": "mintToChecked",
+            "info": {
+              "mint": "NewMintAccount111111111111111111111111111",
+              "account": "DevWalletTokenAccount11111111111111111111",
+              "mintAuthority": "DevWallet111111111111111111111111111111111",
+              "tokenAmount": { "amount": "1000000000000", "decimals": 6, "uiAmount": 1000000.0, "uiAmountString": "1000000" }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "preBalances": [500000000, 0, 0, 0],
+    "postBalances": [496595000, 1400000, 2000000, 0],
+    "preTokenBalances": [],
+    "postTokenBalances": [
+      {
+        "accountIndex": 2,
+        "mint": "NewMintAccount111111111111111111111111111",
+        "owner": "DevWallet111111111111111111111111111111111",
+        "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "uiTokenAmount": { "amount": "1000000000000", "decimals": 6, "uiAmount": 1000000.0, "uiAmountString": "1000000" }
+      }
+    ],
+    "innerInstructions": [],
+    "logMessages": [
+      "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [1]",
+      "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success"
+    ],
+    "computeUnitsConsumed": 8000
+  }
+}

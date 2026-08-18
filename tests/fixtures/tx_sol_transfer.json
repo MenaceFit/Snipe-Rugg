@@ -1,0 +1,44 @@
+{
+  "slot": 300000003,
+  "blockTime": 1755000060,
+  "version": 0,
+  "transaction": {
+    "signatures": ["TransferTxSignature11111111111111111111111111111111111111"],
+    "message": {
+      "accountKeys": [
+        { "pubkey": "WalletBuyer1111111111111111111111111111111", "signer": true, "writable": true, "source": "transaction" },
+        { "pubkey": "SomeOtherWallet11111111111111111111111111111", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "11111111111111111111111111111111111111111", "signer": false, "writable": false, "source": "transaction" }
+      ],
+      "recentBlockhash": "11111111111111111111111111111111111111111",
+      "instructions": [
+        {
+          "program": "system",
+          "programId": "11111111111111111111111111111111111111111",
+          "parsed": {
+            "type": "transfer",
+            "info": {
+              "source": "WalletBuyer1111111111111111111111111111111",
+              "destination": "SomeOtherWallet11111111111111111111111111111",
+              "lamports": 200000000
+            }
+          }
+        }
+      ]
+    }
+  },
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "preBalances": [1342495000, 0, 0],
+    "postBalances": [1142490000, 200000000, 0],
+    "preTokenBalances": [],
+    "postTokenBalances": [],
+    "innerInstructions": [],
+    "logMessages": [
+      "Program 11111111111111111111111111111111111111111 invoke [1]",
+      "Program 11111111111111111111111111111111111111111 success"
+    ],
+    "computeUnitsConsumed": 300
+  }
+}

@@ -43,11 +43,12 @@ Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─┬─▶ T
                                                           └─▶ Database
 ```
 
-**What exists today (Phase 1)** is the left-hand side of this diagram: both
-WebSocket sources, the ingestion layer, and the event queue, ending at a
-provider-agnostic `NormalizedChainEvent` published on an in-process event bus.
-Everything right of "Event Queue" is a later phase and does not exist yet — see
-`ROADMAP.md`.
+**Phase 1** built the left-hand side of this diagram: both WebSocket sources,
+the ingestion layer, and the event queue, ending at a provider-agnostic
+`NormalizedChainEvent` published on an in-process event bus. **Phase 2** added
+the Transaction Decoder, Alert Engine, and Database boxes — scoped to wallet
+tracking, not the token/dev/strategy engines, which are still later phases —
+see `ROADMAP.md`.
 
 ## Module map (implemented)
 
@@ -85,8 +86,56 @@ Everything right of "Event Queue" is a later phase and does not exist yet — se
 - `ingestion/gap_recovery.py` — on reconnect, replays any signatures missed
   for tracked addresses via RPC HTTP `getSignaturesForAddress`, so a brief
   outage doesn't silently drop transactions.
-- `main.py` — a real, runnable demo wiring all of the above together against
+- `main.py` — a real, runnable demo wiring the Phase 1 core together against
   actual Solana infrastructure (see README quickstart).
+- `decoder/transaction_decoder.py` — raw `getTransaction(jsonParsed)` →
+  `DecodedTransaction`, via balance deltas (`preBalances`/`postBalances`,
+  `preTokenBalances`/`postTokenBalances`) rather than per-program instruction
+  parsing — see "Why balance deltas" below.
+- `decoder/classifier.py` — `DecodedTransaction` + a wallet → BUY/SELL/SWAP
+  (`NormalizedTrade`) or TRANSFER/MINT/BURN/APPROVAL/STAKE/UNSTAKE/
+  ACCOUNT_CREATE/ACCOUNT_CLOSE/TOKEN_CREATE (`NormalizedActivity`).
+- `decoder/constants.py` — known program IDs/mints for DEX labeling only
+  (never used to build or sign anything), and the infrastructure-program guard
+  that keeps a self-mint from looking like a BUY.
+- `db/` — async SQLAlchemy: `base.py` (engine/session), `models.py`
+  (`tracked_wallets`, `wallet_groups`, `wallet_group_members`, `token_trades`,
+  `wallet_activity`, `alerts`), `repository.py` (the only thing that touches a
+  session directly).
+- `tracking/wallet_tracker.py` — consumes `"chain.normalized_event"`, fetches
+  the full transaction for a tracked wallet's logs notification, decodes,
+  classifies, persists, and alerts through an `AlertSink` protocol it doesn't
+  know is backed by Discord.
+- `alerts/embeds.py` — Discord embed builders; no USD/age fields until a
+  market-data provider exists to back them.
+- `discord_bot/services.py` — `/wallet` and `/watchlist` command logic as
+  plain async methods, independent of discord.py's `Interaction` machinery.
+- `discord_bot/bot.py` / `discord_bot/alert_sink.py` — the `app_commands`
+  wiring and the concrete `AlertSink` that actually posts to a channel; the
+  only two files in Phase 2 that import `discord`.
+- `bot_main.py` — the full composition root (Phase 1 + Phase 2) that a real
+  deployment runs.
+
+## Why balance deltas, not per-program instruction parsing
+
+The RPC's `jsonParsed` encoding auto-decodes System/Token/Token-2022/Stake
+program instructions into a structured `{"type": ..., "info": {...}}` shape,
+but Pump.fun/PumpSwap/Raydium/Jupiter instructions arrive as opaque
+`programId` + base58 `data` — there's no generic parsed form for them the way
+there is for the native programs, and decoding each DEX's specific layout
+would mean pulling in and maintaining their IDLs. `preBalances`/`postBalances`
+and `preTokenBalances`/`postTokenBalances` already say exactly what a
+transaction did to a wallet's SOL and SPL holdings, regardless of which DEX
+produced that result — so the classifier reasons about *what changed*, and
+only reaches for parsed instructions (`decoder/classifier.py`) for the things
+balance deltas can't tell you: mint/burn/approve/stake/create/close.
+
+One real trap this caught during testing: minting tokens to yourself pays SOL
+rent and receives tokens — the exact same balance-delta shape as a BUY. The
+classifier refuses to call anything a trade unless a program outside a fixed
+"wallet infrastructure" set (System/Token/Token-2022/AssociatedToken/Stake)
+was actually invoked (`constants.has_external_program`); see
+`test_self_mint_is_not_misclassified_as_a_buy` in the test suite.
 
 ## Concurrency notes (read before touching `solana_ws.py`)
 

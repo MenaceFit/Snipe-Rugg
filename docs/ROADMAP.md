@@ -25,25 +25,52 @@ Not yet validated against live mainnet from within a development session — see
 the note in the top-level summary of whichever session built this; run the
 quickstart yourself against a real endpoint to confirm.
 
-## Phase 2 — Wallet tracker — not started
+## Phase 2 — Wallet tracker — **done**
 
-Spec sections 7–14, 20–25, 63, 71–77, 103–110.
+Spec sections 7–15, 23–30, 63, 70 (subset).
 
-- Wallet management (`/wallet add|remove|list|info|pause|resume`) and
-  watchlists/groups (`/watchlist ...`).
-- `TransactionDecoder`: raw transaction → `DecodedTransaction` (signature,
-  slot, block_time, signer, programs, accounts, instructions, inner
-  instructions, SOL/SPL transfers, swaps).
-- `NormalizedTrade` / business-level `EventType` (BUY, SELL, TRANSFER, SWAP,
-  TOKEN_CREATE, LIQUIDITY_ADD/REMOVE, MINT, BURN, ...) — these schemas belong
-  next to the decoder that produces them, not defined speculatively in Phase 1.
-- Buy/sell detection across SOL, wrapped SOL, USDC, multi-hop swaps.
-- Price engine (execution price, USD/SOL value) from the transaction itself,
-  not just a global market price.
-- Discord alerts for the above, with the latency breakdown from spec section 4
-  (detection / decode / Discord / total) shown per alert.
-- PostgreSQL schema for `tracked_wallets`, `transactions`, `normalized_events`,
-  `token_trades`, `token_transfers`.
+- `TransactionDecoder`: raw `getTransaction(jsonParsed)` → `DecodedTransaction`
+  (signature, slot, block_time, success, signer, programs, accounts,
+  instructions, inner instructions, SOL/SPL balance deltas), balance-delta
+  based rather than per-program instruction parsing — see
+  `ARCHITECTURE.md` for why.
+- Classifier: `DecodedTransaction` + a wallet → BUY/SELL/SWAP
+  (`NormalizedTrade`) or TRANSFER/MINT/BURN/APPROVAL/STAKE/UNSTAKE/
+  ACCOUNT_CREATE/ACCOUNT_CLOSE/TOKEN_CREATE (`NormalizedActivity`). Requires an
+  external (non-System/Token/Stake) program before calling something a trade,
+  specifically so minting tokens to yourself doesn't look like a BUY.
+  LIQUIDITY_ADD/LIQUIDITY_REMOVE are **not** implemented — no generic parsed
+  form exists for them the way there is for System/Token/Stake; that needs
+  each DEX's own instruction layout and is Phase 3 work alongside graduation
+  detection.
+- SQLAlchemy async DB layer: `tracked_wallets`, `wallet_groups`,
+  `wallet_group_members`, `token_trades`, `wallet_activity`, `alerts`. Tests
+  run against sqlite+aiosqlite; production targets postgres+asyncpg per
+  `.env.example`. No migrations yet (Alembic) — `init_models()` is
+  create-all convenience, not a substitute once there's data worth keeping.
+- `WalletTracker`: consumes Phase 1's normalized event stream, fetches the
+  full transaction, decodes, classifies, persists, and alerts — decoupled from
+  discord.py via an `AlertSink` protocol, so it's fully unit-tested without a
+  live Discord connection.
+- Discord bot: `/wallet add|remove|list|info|pause|resume` and
+  `/watchlist add|add-wallet|list` slash commands. Adding a wallet subscribes
+  it live immediately; pausing unsubscribes, resuming resubscribes. Command
+  logic lives in a plain-Python service layer (`discord_bot/services.py`),
+  tested directly; `discord_bot/bot.py` is just the `app_commands` wiring on
+  top of it.
+- Alert embeds with the real measured latency breakdown from spec section 4.
+  USD estimates and token age are deliberately absent (need a market-data /
+  token-metadata provider — Phase 3); large-sell-% and dev-labeled alerts need
+  position-size and creator-identity context that doesn't exist until the dev
+  monitor (Phase 4).
+- Full composition root: `python -m snipe_rugg.bot_main` (needs `DISCORD_TOKEN`
+  and `DISCORD_ALERT_CHANNEL_ID`).
+
+Not validated against a live Discord connection or live mainnet from within a
+development session (same network-policy constraint as Phase 1, plus no bot
+token in-session) — the command/decoder/classifier/tracker logic is
+extensively tested locally, but running the bot for real needs to happen
+outside this sandbox.
 
 ## Phase 3 — Token detector — not started
 

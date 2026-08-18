@@ -1,0 +1,66 @@
+{
+  "slot": 300000001,
+  "blockTime": 1755000001,
+  "version": 0,
+  "transaction": {
+    "signatures": ["BuyTxSignature1111111111111111111111111111111111111111111"],
+    "message": {
+      "accountKeys": [
+        { "pubkey": "WalletBuyer1111111111111111111111111111111", "signer": true, "writable": true, "source": "transaction" },
+        { "pubkey": "WalletTokenAccount111111111111111111111111", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "PoolAccount1111111111111111111111111111111", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "signer": false, "writable": false, "source": "transaction" }
+      ],
+      "recentBlockhash": "11111111111111111111111111111111111111111",
+      "instructions": [
+        {
+          "programId": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+          "accounts": ["WalletBuyer1111111111111111111111111111111", "PoolAccount1111111111111111111111111111111", "WalletTokenAccount111111111111111111111111"],
+          "data": "opaqueBase58SwapData"
+        }
+      ]
+    }
+  },
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "preBalances": [2000000000, 0, 500000000, 0, 0],
+    "postBalances": [999995000, 0, 1500000000, 0, 0],
+    "preTokenBalances": [],
+    "postTokenBalances": [
+      {
+        "accountIndex": 1,
+        "mint": "TokenMintXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        "owner": "WalletBuyer1111111111111111111111111111111",
+        "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "uiTokenAmount": { "amount": "5000000", "decimals": 6, "uiAmount": 5.0, "uiAmountString": "5" }
+      }
+    ],
+    "innerInstructions": [
+      {
+        "index": 0,
+        "instructions": [
+          {
+            "program": "spl-token",
+            "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            "parsed": {
+              "type": "transfer",
+              "info": {
+                "source": "PoolTokenAccount11111111111111111111111111",
+                "destination": "WalletTokenAccount111111111111111111111111",
+                "authority": "PoolAuthority111111111111111111111111111111",
+                "amount": "5000000"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "logMessages": [
+      "Program pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA invoke [1]",
+      "Program pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA success"
+    ],
+    "computeUnitsConsumed": 45000
+  }
+}
