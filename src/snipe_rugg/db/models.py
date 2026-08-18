@@ -26,6 +26,16 @@ class WalletStatus(str, enum.Enum):
     PAUSED = "paused"
 
 
+class WalletSource(str, enum.Enum):
+    """How a wallet ended up in tracked_wallets: explicitly via /wallet add, or
+    auto-discovered because it created a token we saw (spec section 20-37's dev
+    monitor needs a creator's *future* activity, not just the one launch tx that
+    first revealed them — see tracking/wallet_tracker.py)."""
+
+    MANUAL = "manual"
+    AUTO_DEV = "auto_dev"
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex
 
@@ -37,6 +47,7 @@ class TrackedWallet(Base):
     address: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default=WalletStatus.ACTIVE.value)
+    source: Mapped[str] = mapped_column(String(16), default=WalletSource.MANUAL.value)
 
     alert_buys: Mapped[bool] = mapped_column(Boolean, default=True)
     alert_sells: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -143,3 +154,23 @@ class Token(Base):
     graduated_signature: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DevRiskSignal(Base):
+    """One detected repeated-behavior pattern for a creator address (spec
+    section 20-37, 56-59, 84). Upserted per (creator_address, pattern_type) so
+    re-detection updates evidence in place instead of piling up duplicate rows
+    — see dev/service.py. `severity`/`evidence` always reflect the most recent
+    real computation; this table never stores a fabricated or carried-over
+    number."""
+
+    __tablename__ = "dev_risk_signals"
+    __table_args__ = (UniqueConstraint("creator_address", "pattern_type", name="uq_dev_signal_creator_pattern"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    creator_address: Mapped[str] = mapped_column(String(64), index=True)
+    pattern_type: Mapped[str] = mapped_column(String(32))
+    severity: Mapped[str] = mapped_column(String(16))
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    first_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

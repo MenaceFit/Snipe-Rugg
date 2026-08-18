@@ -9,7 +9,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from snipe_rugg.discord_bot.services import WalletCommandService, WatchlistCommandService
+from snipe_rugg.discord_bot.services import (
+    DevCommandService,
+    WalletCommandService,
+    WatchlistCommandService,
+)
 
 
 class WalletGroup(app_commands.Group):
@@ -68,21 +72,35 @@ class WatchlistGroup(app_commands.Group):
         await interaction.response.send_message(await self._service.list_watchlist(watchlist))
 
 
+class DevGroup(app_commands.Group):
+    def __init__(self, service: DevCommandService) -> None:
+        super().__init__(name="dev", description="Dev/creator profiles and repeated-pattern risk signals")
+        self._service = service
+
+    @app_commands.command(name="profile", description="Show a creator address's launch history and risk signals")
+    @app_commands.describe(address="Creator wallet address")
+    async def profile(self, interaction: discord.Interaction, address: str) -> None:
+        await interaction.response.send_message(await self._service.profile(address))
+
+
 class SnipeRuggBot(commands.Bot):
     def __init__(
         self,
         *,
         wallet_service: WalletCommandService,
         watchlist_service: WatchlistCommandService,
+        dev_service: DevCommandService,
         intents: discord.Intents | None = None,
     ) -> None:
         super().__init__(command_prefix="!", intents=intents or discord.Intents.default())
         self._wallet_service = wallet_service
         self._watchlist_service = watchlist_service
+        self._dev_service = dev_service
 
     async def setup_hook(self) -> None:
         self.tree.add_command(WalletGroup(self._wallet_service))
         self.tree.add_command(WatchlistGroup(self._watchlist_service))
+        self.tree.add_command(DevGroup(self._dev_service))
         await self.tree.sync()
 
 
@@ -90,6 +108,12 @@ def build_bot(
     *,
     wallet_service: WalletCommandService,
     watchlist_service: WatchlistCommandService,
+    dev_service: DevCommandService,
     intents: discord.Intents | None = None,
 ) -> SnipeRuggBot:
-    return SnipeRuggBot(wallet_service=wallet_service, watchlist_service=watchlist_service, intents=intents)
+    return SnipeRuggBot(
+        wallet_service=wallet_service,
+        watchlist_service=watchlist_service,
+        dev_service=dev_service,
+        intents=intents,
+    )

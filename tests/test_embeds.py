@@ -3,11 +3,18 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal
 
-from snipe_rugg.alerts.embeds import activity_embed, graduation_embed, launch_embed, trade_embed
+from snipe_rugg.alerts.embeds import (
+    activity_embed,
+    dev_risk_embed,
+    graduation_embed,
+    launch_embed,
+    trade_embed,
+)
 from snipe_rugg.core.clock import utc_now
 from snipe_rugg.core.events import LatencyTrace
 from snipe_rugg.db.models import Token
 from snipe_rugg.decoder.models import EventType, NormalizedActivity, NormalizedTrade
+from snipe_rugg.dev.models import DevRiskAssessment, PatternType, RiskSignal, Severity
 from snipe_rugg.launchpad.models import LaunchEvent
 
 
@@ -180,3 +187,47 @@ def test_graduation_embed_without_a_known_wallet_omits_wallet_field():
     )
     embed = graduation_embed(token, wallet_label=None, latency=LatencyTrace(provider_received_at=utc_now()))
     assert _field(embed, "Wallet") is None
+
+
+def test_dev_risk_embed_lists_each_signal_and_never_claims_fraud():
+    assessment = DevRiskAssessment(
+        creator_address="DevWallet111",
+        signals=[
+            RiskSignal(
+                pattern_type=PatternType.SERIAL_LAUNCHER,
+                severity=Severity.HIGH,
+                label="HIGH-RISK REPEATED PATTERN",
+                description="10 tokens launched within 2.0h",
+                evidence={"total_launches": 10},
+            ),
+            RiskSignal(
+                pattern_type=PatternType.LOW_GRADUATION_RATE,
+                severity=Severity.HIGH,
+                label="HIGH-RISK REPEATED PATTERN",
+                description="0/10 launches graduated (0%)",
+                evidence={"graduation_rate": 0.0},
+            ),
+        ],
+        overall_severity=Severity.HIGH,
+    )
+    embed = dev_risk_embed(assessment, wallet_label="DEV_ORANGE")
+
+    assert "HIGH-RISK PATTERN DETECTED" in (embed.title or "")
+    assert _field(embed, "Creator") == "DEV_ORANGE"
+    assert _field(embed, "Signals") == "2"
+    assert any("SERIAL_LAUNCHER" in f.name for f in embed.fields)
+    assert any("LOW_GRADUATION_RATE" in f.name for f in embed.fields)
+    disclaimer = _field(embed, "Disclaimer")
+    assert disclaimer is not None
+    assert "not proof of fraud" in disclaimer.lower()
+    # Never claims outright fraud/scam anywhere in the embed's text.
+    all_text = " ".join([embed.title or ""] + [f.value for f in embed.fields]).lower()
+    assert "rugger" not in all_text
+    assert "scam" not in all_text
+    assert "fraud" not in all_text.replace("not proof of fraud", "")
+
+
+def test_dev_risk_embed_falls_back_to_short_address_without_a_wallet_label():
+    assessment = DevRiskAssessment(creator_address="DevWallet1111111111111111111111", signals=[], overall_severity=None)
+    embed = dev_risk_embed(assessment, wallet_label=None)
+    assert _field(embed, "Creator") == "DevW...1111"

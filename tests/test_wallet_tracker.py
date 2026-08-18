@@ -10,6 +10,7 @@ from snipe_rugg.db.base import create_engine, create_session_factory, init_model
 from snipe_rugg.db.models import TokenTrade, WalletStatus
 from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.decoder.models import EventType, NormalizedTrade
+from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.tracking.wallet_tracker import (
     WalletTracker,
     token_subscription_key,
@@ -38,6 +39,7 @@ class FakeAlertSink:
         self.sent = []
         self.launches = []
         self.graduations = []
+        self.dev_risk_alerts = []
 
     async def send(self, *, wallet, event, latency):
         self.sent.append((wallet, event))
@@ -50,6 +52,10 @@ class FakeAlertSink:
     async def send_graduation(self, *, token, wallet, latency):
         self.graduations.append((token, wallet))
         return "fake-graduation-message-id"
+
+    async def send_dev_risk(self, *, wallet, assessment, latency):
+        self.dev_risk_alerts.append((wallet, assessment))
+        return "fake-dev-risk-message-id"
 
 
 def _chain_event(*, signature: str, subscription_key: str, err=None) -> NormalizedChainEvent:
@@ -81,12 +87,13 @@ async def session_factory():
     await engine.dispose()
 
 
-def _tracker(session_factory, *, rpc, sink=None, provider=None):
+def _tracker(session_factory, *, rpc, sink=None, provider=None, dev_monitor=None):
     return WalletTracker(
         rpc=rpc,
         provider=provider or FakeStreamingProvider(),
         session_factory=session_factory,
         alert_sink=sink or FakeAlertSink(),
+        dev_monitor=dev_monitor or DevMonitorService(session_factory),
     )
 
 

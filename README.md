@@ -15,17 +15,22 @@ Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─▶ Decoder
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for build order and current status.
 
-## Status: Phase 3 — Token detector
+## Status: Phase 4 — Dev monitor
 
 Done so far: Phase 1 (WebSocket connectivity to Solana, reconnect/resubscribe,
 gap-recovery backfill, event normalization, dedup, latency telemetry), Phase 2
 (transaction decoding, buy/sell/transfer/mint/burn/... classification, a
 SQLAlchemy-backed wallet/watchlist store, and a Discord bot with `/wallet` and
-`/watchlist` slash commands that alert on tracked-wallet activity), and Phase 3
+`/watchlist` slash commands that alert on tracked-wallet activity), Phase 3
 (Pump.fun / generic launch detection, auto-tracking a newly launched token
 through to its graduation on PumpSwap, with "🚨 DEV LAUNCH DETECTED" and
-"🎓 GRADUATED" alerts). Dev/graph/strategy tracking and paper trading are later
-phases — see the roadmap — and aren't implemented yet.
+"🎓 GRADUATED" alerts), and Phase 4 (network-wide Pump.fun launch discovery via
+`LaunchMonitor`, auto-tracking unknown creators, dev/creator profiles built
+from real launch/trade history, four repeated-behavior pattern detectors, and
+"🚩 HIGH/MEDIUM-RISK PATTERN DETECTED" alerts that require corroborating
+signals before reaching HIGH — see `docs/ARCHITECTURE.md`'s "Rug-risk signal
+design"). Graph/strategy tracking and paper trading are later phases — see the
+roadmap — and aren't implemented yet.
 
 ## Quickstart
 
@@ -90,21 +95,28 @@ src/snipe_rugg/
     constants.py                # known program IDs/mints (labeling only)
   launchpad/
     detector.py                  # PumpFunLaunchDetector / GenericTokenCreationDetector
+    monitor.py                    # LaunchMonitor: network-wide Pump.fun launch firehose
+  dev/
+    profile.py                   # build_profile(): tokens/trades rows -> DevProfile (pure)
+    patterns.py                   # assess_dev(): DevProfile -> DevRiskAssessment
+    service.py                    # DevMonitorService: DB-backed refresh/persist
+    alerts.py                     # refresh_and_maybe_alert(): shared escalation gate
   db/
     base.py                     # async engine/session
-    models.py                    # tracked_wallets, wallet_groups, token_trades, tokens, ...
+    models.py                    # tracked_wallets, wallet_groups, token_trades, tokens, dev_risk_signals, ...
     repository.py                 # the only thing that touches a session directly
   tracking/
     wallet_tracker.py             # event -> decode -> classify -> persist -> alert -> launch detect
     token_tracker.py               # watches launched mints for graduation to PumpSwap
   alerts/
-    embeds.py                     # Discord embed builders (trade/activity/launch/graduation)
+    sink.py                       # the AlertSink Protocol (business logic <-> discord.py seam)
+    embeds.py                     # Discord embed builders (trade/activity/launch/graduation/dev-risk)
   discord_bot/
-    services.py                   # /wallet and /watchlist command logic (no discord.py)
+    services.py                   # /wallet, /watchlist, /dev command logic (no discord.py)
     bot.py                         # app_commands wiring
     alert_sink.py                  # the concrete AlertSink that posts to a channel
   main.py                         # Phase 1 demo entrypoint
-  bot_main.py                      # full Phase 1-3 composition root
+  bot_main.py                      # full Phase 1-4 composition root
 tests/                        # pytest + pytest-asyncio, incl. a real mock WS server
 docs/                          # architecture, roadmap, provider matrix
 ```

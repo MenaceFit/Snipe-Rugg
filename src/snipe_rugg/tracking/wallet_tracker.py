@@ -18,26 +18,38 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
-from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from snipe_rugg.alerts.sink import AlertSink, BusinessEvent
 from snipe_rugg.core.clock import utc_now
-from snipe_rugg.core.events import LatencyTrace, NormalizedChainEvent, SubscriptionKind
-from snipe_rugg.db.models import Token, TrackedWallet, WalletStatus
+from snipe_rugg.core.events import NormalizedChainEvent, SubscriptionKind
+from snipe_rugg.db.models import TrackedWallet, WalletSource, WalletStatus
 from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.decoder.classifier import classify
-from snipe_rugg.decoder.models import EventType, NormalizedActivity, NormalizedTrade
+from snipe_rugg.decoder.models import EventType, NormalizedTrade
 from snipe_rugg.decoder.transaction_decoder import TransactionDecoder
+from snipe_rugg.dev.alerts import refresh_and_maybe_alert
+from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.launchpad.detector import detect_launch
 from snipe_rugg.launchpad.models import LaunchEvent
 from snipe_rugg.providers.base import StreamingProvider, TransactionProvider
 
+__all__ = [
+    "AlertSink",
+    "BusinessEvent",
+    "WalletTracker",
+    "event_type_of",
+    "sol_denominated_amount",
+    "token_mint_from_key",
+    "token_subscription_key",
+    "wallet_address_from_key",
+    "wallet_subscription_key",
+]
+
 logger = logging.getLogger(__name__)
 
 _WALLET_SUBSCRIPTION_PREFIX = "wallet:"
-
-BusinessEvent = NormalizedTrade | NormalizedActivity
 
 
 def wallet_subscription_key(address: str) -> str:
@@ -62,20 +74,6 @@ def sol_denominated_amount(trade: NormalizedTrade) -> Decimal | None:
     return None
 
 
-class AlertSink(Protocol):
-    async def send(self, *, wallet: TrackedWallet, event: BusinessEvent, latency: LatencyTrace) -> str | None:
-        """Deliver one trade/activity alert; return a message id if available."""
-        ...
-
-    async def send_launch(self, *, wallet: TrackedWallet, launch: LaunchEvent, latency: LatencyTrace) -> str | None:
-        """Deliver a "new token launched by a tracked wallet" alert."""
-        ...
-
-    async def send_graduation(self, *, token: Token, wallet: TrackedWallet | None, latency: LatencyTrace) -> str | None:
-        """Deliver a "token graduated to PumpSwap" alert (tracking/token_tracker.py)."""
-        ...
-
-
 class WalletTracker:
     def __init__(
         self,
@@ -84,11 +82,13 @@ class WalletTracker:
         provider: StreamingProvider,
         session_factory: async_sessionmaker[AsyncSession],
         alert_sink: AlertSink,
+        dev_monitor: DevMonitorService,
     ) -> None:
         self._rpc = rpc
         self._provider = provider
         self._session_factory = session_factory
         self._alert_sink = alert_sink
+        self._dev_monitor = dev_monitor
         self._decoder = TransactionDecoder()
 
     async def handle_normalized_event(self, event: NormalizedChainEvent) -> None:
@@ -137,6 +137,22 @@ class WalletTracker:
             await self._provider.subscribe_logs(mentions=[launch.mint], key=token_subscription_key(launch.mint))
             if wallet.alert_launches:
                 await self._dispatch_launch_alert(wallet, launch, event)
+
+        # A fresh launch always means this address is (still) a dev worth
+        # profiling; an address already auto-discovered as one (source ==
+        # AUTO_DEV) stays worth re-profiling on every subsequent activity too
+        # (e.g. a sell of a token it launched). A manually-tracked wallet that
+        # is *also* a dev only gets re-profiled at its next launch — its sells
+        # are picked up the next time launchpad/monitor.py or this method
+        # itself runs a launch through it; a documented, not silent, gap.
+        if launch is not None or wallet.source == WalletSource.AUTO_DEV.value:
+            await refresh_and_maybe_alert(
+                dev_monitor=self._dev_monitor,
+                alert_sink=self._alert_sink,
+                session_factory=self._session_factory,
+                creator_address=address,
+                latency=event.latency,
+            )
 
     async def _dispatch_alert(
         self, wallet: TrackedWallet, business_event: BusinessEvent, chain_event: NormalizedChainEvent

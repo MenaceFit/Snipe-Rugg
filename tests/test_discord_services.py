@@ -4,7 +4,14 @@ import pytest
 from sqlalchemy.pool import StaticPool
 
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
-from snipe_rugg.discord_bot.services import WalletCommandService, WatchlistCommandService
+from snipe_rugg.db.repository import WalletRepository
+from snipe_rugg.dev.service import DevMonitorService
+from snipe_rugg.discord_bot.services import (
+    DevCommandService,
+    WalletCommandService,
+    WatchlistCommandService,
+)
+from snipe_rugg.launchpad.models import LaunchEvent
 from snipe_rugg.tracking.wallet_tracker import wallet_subscription_key
 from tests.helpers import FakeStreamingProvider
 
@@ -124,3 +131,30 @@ async def test_watchlist_add_unknown_wallet(session_factory):
 
     reply = await watchlist_service.add_wallet("RUGGERS", "GhostWallet111")
     assert "not tracked yet" in reply
+
+
+async def test_dev_profile_reports_no_launches_for_unknown_creator(session_factory):
+    service = DevCommandService(dev_monitor=DevMonitorService(session_factory))
+    reply = await service.profile("GhostCreator111")
+    assert "No launches on record" in reply
+
+
+async def test_dev_profile_summarizes_launch_history_and_signals(session_factory):
+    async with session_factory() as session:
+        repo = WalletRepository(session)
+        for i in range(4):
+            await repo.record_token_launch(
+                LaunchEvent(
+                    mint=f"Mint{i}", creator="DevWallet111", launchpad="Pump.fun", pair="SOL", slot=1,
+                    block_time=None, signature=f"sig-{i}",
+                )
+            )
+        await session.commit()
+
+    service = DevCommandService(dev_monitor=DevMonitorService(session_factory))
+    reply = await service.profile("DevWallet111")
+
+    assert "Launches: 4" in reply
+    assert "graduated: 0" in reply
+    assert "LOW_GRADUATION_RATE" in reply
+    assert "HIGH-RISK REPEATED PATTERN" in reply

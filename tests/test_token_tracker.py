@@ -7,6 +7,7 @@ from snipe_rugg.core.clock import utc_now
 from snipe_rugg.core.events import LatencyTrace, NormalizedChainEvent, SubscriptionKind
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
 from snipe_rugg.db.repository import WalletRepository
+from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.launchpad.models import LaunchEvent, LaunchpadStatus
 from snipe_rugg.tracking.token_tracker import TokenTracker
 from snipe_rugg.tracking.wallet_tracker import token_mint_from_key, token_subscription_key
@@ -33,6 +34,7 @@ class FakeRpc:
 class FakeAlertSink:
     def __init__(self):
         self.graduations = []
+        self.dev_risk_alerts = []
 
     async def send(self, *, wallet, event, latency):
         raise NotImplementedError
@@ -43,6 +45,10 @@ class FakeAlertSink:
     async def send_graduation(self, *, token, wallet, latency):
         self.graduations.append((token, wallet))
         return "fake-graduation-message-id"
+
+    async def send_dev_risk(self, *, wallet, assessment, latency):
+        self.dev_risk_alerts.append((wallet, assessment))
+        return "fake-dev-risk-message-id"
 
 
 def _chain_event(*, signature: str, subscription_key: str) -> NormalizedChainEvent:
@@ -87,7 +93,9 @@ async def test_graduation_updates_status_and_alerts(session_factory):
     signature = raw_tx["transaction"]["signatures"][0]
     rpc = FakeRpc({signature: raw_tx})
     sink = FakeAlertSink()
-    tracker = TokenTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = TokenTracker(
+        rpc=rpc, session_factory=session_factory, alert_sink=sink, dev_monitor=DevMonitorService(session_factory)
+    )
 
     event = _chain_event(signature=signature, subscription_key=token_subscription_key(MINT))
     await tracker.handle_normalized_event(event)
@@ -120,7 +128,9 @@ async def test_graduation_alert_suppressed_when_creator_disabled_launch_alerts(s
     signature = raw_tx["transaction"]["signatures"][0]
     rpc = FakeRpc({signature: raw_tx})
     sink = FakeAlertSink()
-    tracker = TokenTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = TokenTracker(
+        rpc=rpc, session_factory=session_factory, alert_sink=sink, dev_monitor=DevMonitorService(session_factory)
+    )
 
     event = _chain_event(signature=signature, subscription_key=token_subscription_key(MINT))
     await tracker.handle_normalized_event(event)
@@ -145,7 +155,9 @@ async def test_graduation_without_a_known_creator_wallet_still_alerts(session_fa
     signature = raw_tx["transaction"]["signatures"][0]
     rpc = FakeRpc({signature: raw_tx})
     sink = FakeAlertSink()
-    tracker = TokenTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = TokenTracker(
+        rpc=rpc, session_factory=session_factory, alert_sink=sink, dev_monitor=DevMonitorService(session_factory)
+    )
 
     event = _chain_event(signature=signature, subscription_key=token_subscription_key(MINT))
     await tracker.handle_normalized_event(event)
@@ -160,7 +172,9 @@ async def test_unknown_mint_is_ignored(session_factory):
     signature = raw_tx["transaction"]["signatures"][0]
     rpc = FakeRpc({signature: raw_tx})
     sink = FakeAlertSink()
-    tracker = TokenTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = TokenTracker(
+        rpc=rpc, session_factory=session_factory, alert_sink=sink, dev_monitor=DevMonitorService(session_factory)
+    )
 
     event = _chain_event(signature=signature, subscription_key=token_subscription_key("GhostMint111"))
     await tracker.handle_normalized_event(event)
@@ -181,7 +195,9 @@ async def test_already_graduated_token_is_not_reprocessed(session_factory):
     signature = raw_tx["transaction"]["signatures"][0]
     rpc = FakeRpc({signature: raw_tx})
     sink = FakeAlertSink()
-    tracker = TokenTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = TokenTracker(
+        rpc=rpc, session_factory=session_factory, alert_sink=sink, dev_monitor=DevMonitorService(session_factory)
+    )
 
     event = _chain_event(signature=signature, subscription_key=token_subscription_key(MINT))
     await tracker.handle_normalized_event(event)
@@ -201,7 +217,9 @@ async def test_non_graduation_transaction_on_watched_mint_is_ignored(session_fac
     signature = raw_tx["transaction"]["signatures"][0]
     rpc = FakeRpc({signature: raw_tx})
     sink = FakeAlertSink()
-    tracker = TokenTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = TokenTracker(
+        rpc=rpc, session_factory=session_factory, alert_sink=sink, dev_monitor=DevMonitorService(session_factory)
+    )
 
     event = _chain_event(signature=signature, subscription_key=token_subscription_key(MINT))
     await tracker.handle_normalized_event(event)

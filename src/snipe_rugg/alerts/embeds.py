@@ -20,6 +20,7 @@ from snipe_rugg.core.clock import utc_now
 from snipe_rugg.core.events import LatencyTrace
 from snipe_rugg.db.models import Token
 from snipe_rugg.decoder.models import EventType, NormalizedActivity, NormalizedTrade
+from snipe_rugg.dev.models import DevRiskAssessment, Severity
 from snipe_rugg.launchpad.models import LaunchEvent, LaunchpadStatus
 
 _TRADE_COLOR = {
@@ -140,6 +141,35 @@ def graduation_embed(token: Token, *, wallet_label: str | None, latency: Latency
         embed.add_field(name="TX", value=f"[View]({_explorer_url(token.graduated_signature)})", inline=False)
     if token.graduated_at is not None:
         embed.timestamp = token.graduated_at
+    return embed
+
+
+_ASSESSMENT_COLOR = {
+    Severity.HIGH: discord.Color.red(),
+    Severity.MEDIUM: discord.Color.orange(),
+    Severity.LOW: discord.Color.light_grey(),
+}
+
+
+def dev_risk_embed(assessment: DevRiskAssessment, *, wallet_label: str | None) -> discord.Embed:
+    """spec section 20-37, 56-59, 84. Every field comes straight from
+    DevRiskAssessment — a probabilistic, multi-signal read of this address's
+    own launch/graduation/sell history, never a fraud verdict (spec section
+    62). No LatencyTrace here: unlike the other embeds, this isn't triggered
+    by one transaction's detection latency, it's a recomputation over
+    everything persisted about this address so far."""
+    severity = assessment.overall_severity or Severity.LOW
+    embed = discord.Embed(title=f"🚩 {severity.value}-RISK PATTERN DETECTED", color=_ASSESSMENT_COLOR[severity])
+    embed.add_field(name="Creator", value=wallet_label or _short(assessment.creator_address), inline=True)
+    embed.add_field(name="Signals", value=str(len(assessment.signals)), inline=True)
+    for signal in assessment.signals:
+        embed.add_field(name=f"{signal.pattern_type.value} — {signal.label}", value=signal.description, inline=False)
+    embed.add_field(
+        name="Disclaimer",
+        value="Pattern-based signal derived from this address's own on-chain history. "
+        "Not proof of fraud, not financial advice.",
+        inline=False,
+    )
     return embed
 
 

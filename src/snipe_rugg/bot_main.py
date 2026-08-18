@@ -18,11 +18,17 @@ from snipe_rugg.core.dedup import InMemoryDeduplicator
 from snipe_rugg.core.event_bus import EventBus
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
 from snipe_rugg.db.repository import WalletRepository
+from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.discord_bot.alert_sink import DiscordAlertSink
 from snipe_rugg.discord_bot.bot import build_bot
-from snipe_rugg.discord_bot.services import WalletCommandService, WatchlistCommandService
+from snipe_rugg.discord_bot.services import (
+    DevCommandService,
+    WalletCommandService,
+    WatchlistCommandService,
+)
 from snipe_rugg.ingestion.gap_recovery import GapRecoveryService
 from snipe_rugg.ingestion.pipeline import TOPIC_NORMALIZED_EVENT, IngestionPipeline
+from snipe_rugg.launchpad.monitor import LaunchMonitor
 from snipe_rugg.logging_setup import configure_logging
 from snipe_rugg.providers.base import StreamingProvider
 from snipe_rugg.providers.helius_ws import HeliusWebSocketProvider
@@ -62,15 +68,25 @@ async def run() -> None:
     pipeline = IngestionPipeline(deduplicator=InMemoryDeduplicator(), event_bus=bus)
     gap_recovery = GapRecoveryService(rpc, pipeline)
 
+    dev_monitor = DevMonitorService(session_factory)
     bot = build_bot(
         wallet_service=WalletCommandService(session_factory=session_factory, provider=manager),
         watchlist_service=WatchlistCommandService(session_factory=session_factory),
+        dev_service=DevCommandService(dev_monitor=dev_monitor),
     )
     alert_sink = DiscordAlertSink(bot, channel_id=settings.discord_alert_channel_id)
-    wallet_tracker = WalletTracker(rpc=rpc, provider=manager, session_factory=session_factory, alert_sink=alert_sink)
-    token_tracker = TokenTracker(rpc=rpc, session_factory=session_factory, alert_sink=alert_sink)
+    wallet_tracker = WalletTracker(
+        rpc=rpc, provider=manager, session_factory=session_factory, alert_sink=alert_sink, dev_monitor=dev_monitor
+    )
+    token_tracker = TokenTracker(
+        rpc=rpc, session_factory=session_factory, alert_sink=alert_sink, dev_monitor=dev_monitor
+    )
+    launch_monitor = LaunchMonitor(
+        rpc=rpc, provider=manager, session_factory=session_factory, alert_sink=alert_sink, dev_monitor=dev_monitor
+    )
     bus.subscribe(TOPIC_NORMALIZED_EVENT, wallet_tracker.handle_normalized_event)
     bus.subscribe(TOPIC_NORMALIZED_EVENT, token_tracker.handle_normalized_event)
+    bus.subscribe(TOPIC_NORMALIZED_EVENT, launch_monitor.handle_normalized_event)
 
     async def on_reconnect(_: StreamingProvider) -> None:
         async with session_factory() as session:
@@ -84,6 +100,8 @@ async def run() -> None:
     await rpc.start()
     await pipeline.start()
     await manager.start()
+
+    await launch_monitor.subscribe()
 
     async with session_factory() as session:
         repo = WalletRepository(session)

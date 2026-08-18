@@ -61,4 +61,3 @@ def dex_label(program_ids: list[str]) -> str | None:
 
 def has_external_program(program_ids: list[str]) -> bool:
     return any(p not in INFRASTRUCTURE_PROGRAMS for p in program_ids)
-    return None

@@ -117,16 +117,61 @@ constraint as Phases 1-2): the launch and graduation fixtures are realistic
 but synthetic, built from verified program IDs and documented instruction
 shapes rather than captured from an actual mainnet transaction.
 
-## Phase 4 — Dev monitor — not started
+## Phase 4 — Dev monitor — **done**
 
 Spec sections 20–37, 56–59, 84.
 
-- Dev/creator profiles, dev history, repeated-behavior / pattern-fingerprint
-  detection.
-- `DevCluster` / creator-cluster detection (common funding, timing, transfers).
-- Rug-risk signal engine — multi-signal, probabilistic, explicitly never a
-  single-signal verdict (spec section 62): outputs "HIGH-RISK REPEATED
-  PATTERN", never an accusation of fraud.
+- `dev/profile.py`: `build_profile()` — a pure function turning a creator's
+  persisted `tokens` + `token_trades` rows into a `DevProfile` (launch count,
+  graduated count/rate, average time between launches, average time to
+  graduation, count of "sold its own launch within an hour" trades). Every
+  field is a real aggregate; nothing here is estimated.
+- `dev/patterns.py`: four pattern detectors over a `DevProfile` —
+  `SERIAL_LAUNCHER` (N+ launches within a 24h window), `LOW_GRADUATION_RATE`
+  (N+ launches, most/all still on the bonding curve), `RAPID_RELAUNCH`
+  (launches averaging under 10 minutes apart), `DEV_SOLD_OWN_LAUNCH` (sold its
+  own token within an hour of launching it, one or more times). Each threshold
+  is an explicit, named constant. Spec section 62's "never a single-signal
+  verdict" is enforced structurally, not just in wording: `assess_dev()`'s
+  `_combine()` only reaches an overall HIGH once *two* independent signals are
+  HIGH — a lone HIGH signal is still reported (in `signals`), but the combined
+  read is capped at MEDIUM. Labels are "HIGH-RISK REPEATED PATTERN" /
+  "REPEATED PATTERN — WATCH" — never "rugger", "scam", or "fraud".
+- `dev/service.py` (`DevMonitorService`) + `dev/alerts.py`
+  (`refresh_and_maybe_alert`): the shared recompute-persist-escalate path
+  `WalletTracker`, `TokenTracker`, and the new `LaunchMonitor` all call after
+  any activity that could change a creator's profile (a launch, a graduation,
+  a sell). `dev_risk_signals` stores one upserted row per (creator, pattern) —
+  re-detecting a standing pattern doesn't spam Discord again, and a pattern
+  that later stops holding (e.g. a graduation improves the rate) is deleted,
+  not left stale. Alerts fire only when the *combined* assessment reaches HIGH
+  and something was newly escalated.
+- `launchpad/monitor.py` (`LaunchMonitor`): closes a real gap Phase 3 left.
+  `WalletTracker`'s launch detection only ever fired for a launch made *by an
+  already-tracked wallet* — it can't discover a dev nobody added yet, which is
+  the actual point of a launch monitor. `LaunchMonitor` subscribes once to
+  `PUMP_FUN_PROGRAM`'s own logs (the same one-address-per-subscription
+  `logsSubscribe` mechanism, just pointed at a program ID instead of a
+  wallet) and sees every Pump.fun launch network-wide. On an unknown creator
+  it auto-tracks them (`tracked_wallets.source = auto_dev`, conservative
+  default alert flags — launches on, routine buy/sell/transfer alerts off)
+  and subscribes to both the new mint and the creator's own wallet, so their
+  *future* activity — further launches, a sell of what they just launched —
+  keeps flowing through the same decode/classify/persist pipeline every other
+  wallet uses. If `WalletTracker` already recorded the same launch first
+  (the creator happened to already be tracked), `record_token_launch`'s
+  existing idempotency makes this a harmless no-op, not a duplicate.
+- `/dev profile <address>`: on-demand profile + risk-signal lookup,
+  independent of whether any alert has ever fired for that address.
+- `DevCluster` / cross-wallet creator-cluster detection (shared funding
+  wallets, not just shared creator address) is **not** implemented here — it
+  needs the wallet relationship graph, which is Phase 5's job; `early_sell`
+  and the other single-address patterns above don't need it.
+
+Not validated against live mainnet from within a development session (same
+constraint as Phases 1-3): pattern thresholds are reasonable starting points,
+not tuned against real rug-pull data, and are meant to be adjusted with real
+observation, not treated as ground truth from day one.
 
 ## Phase 5 — Graph — not started
 

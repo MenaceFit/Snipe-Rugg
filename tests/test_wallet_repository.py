@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
-from snipe_rugg.db.models import WalletStatus
+from snipe_rugg.db.models import WalletSource, WalletStatus
 from snipe_rugg.db.repository import (
     GroupAlreadyExists,
     GroupNotFound,
@@ -178,3 +178,115 @@ async def test_mark_graduated_updates_status_and_timestamps(session):
 async def test_mark_graduated_unknown_mint_returns_none(session):
     repo = WalletRepository(session)
     assert await repo.mark_graduated("GhostMint", slot=1, block_time=None) is None
+
+
+async def test_get_or_create_dev_wallet_creates_with_auto_dev_defaults(session):
+    repo = WalletRepository(session)
+    wallet, created = await repo.get_or_create_dev_wallet("DevWallet111")
+
+    assert created is True
+    assert wallet.source == WalletSource.AUTO_DEV.value
+    assert wallet.alert_launches is True
+    assert wallet.alert_buys is False
+    assert wallet.alert_sells is False
+
+
+async def test_get_or_create_dev_wallet_is_idempotent_and_preserves_manual(session):
+    repo = WalletRepository(session)
+    manual = await repo.add_wallet("DevWallet111", name="Manually Tracked")
+
+    wallet, created = await repo.get_or_create_dev_wallet("DevWallet111")
+
+    assert created is False
+    assert wallet.id == manual.id
+    assert wallet.source == WalletSource.MANUAL.value
+
+
+async def test_list_tokens_by_creator_orders_by_launch(session):
+    repo = WalletRepository(session)
+    await repo.record_token_launch(_launch_event(mint="MintA", creator="DevWallet111"))
+    await repo.record_token_launch(_launch_event(mint="MintB", creator="DevWallet111"))
+    await repo.record_token_launch(_launch_event(mint="MintC", creator="SomeoneElse"))
+
+    tokens = await repo.list_tokens_by_creator("DevWallet111")
+    assert [t.mint for t in tokens] == ["MintA", "MintB"]
+
+
+async def test_list_trades_for_wallet_returns_only_that_wallet(session):
+    repo = WalletRepository(session)
+    await repo.record_trade(
+        NormalizedTrade(
+            wallet="DevWallet111",
+            token_in="MintA",
+            token_out="SOL",
+            amount_in=Decimal(100),
+            amount_out=Decimal("0.5"),
+            side=EventType.SELL,
+            program="PumpSwap",
+            slot=10,
+            block_time=None,
+            signature="sig-sell",
+            confidence="high",
+        )
+    )
+    await repo.record_trade(
+        NormalizedTrade(
+            wallet="SomeoneElse",
+            token_in="MintB",
+            token_out="SOL",
+            amount_in=Decimal(1),
+            amount_out=Decimal(1),
+            side=EventType.SELL,
+            program="PumpSwap",
+            slot=11,
+            block_time=None,
+            signature="sig-other",
+            confidence="high",
+        )
+    )
+
+    trades = await repo.list_trades_for_wallet("DevWallet111")
+    assert [t.signature for t in trades] == ["sig-sell"]
+
+
+async def test_upsert_dev_risk_signal_first_insert_is_escalated(session):
+    repo = WalletRepository(session)
+    row, escalated = await repo.upsert_dev_risk_signal(
+        creator_address="DevWallet111", pattern_type="SERIAL_LAUNCHER", severity="MEDIUM", evidence={"total": 5}
+    )
+    assert escalated is True
+    assert row.severity == "MEDIUM"
+
+
+async def test_upsert_dev_risk_signal_reconfirmation_is_not_escalated(session):
+    repo = WalletRepository(session)
+    await repo.upsert_dev_risk_signal(
+        creator_address="DevWallet111", pattern_type="SERIAL_LAUNCHER", severity="MEDIUM", evidence={"total": 5}
+    )
+    _, escalated = await repo.upsert_dev_risk_signal(
+        creator_address="DevWallet111", pattern_type="SERIAL_LAUNCHER", severity="MEDIUM", evidence={"total": 6}
+    )
+    assert escalated is False
+
+
+async def test_upsert_dev_risk_signal_severity_increase_is_escalated(session):
+    repo = WalletRepository(session)
+    await repo.upsert_dev_risk_signal(
+        creator_address="DevWallet111", pattern_type="SERIAL_LAUNCHER", severity="MEDIUM", evidence={}
+    )
+    _, escalated = await repo.upsert_dev_risk_signal(
+        creator_address="DevWallet111", pattern_type="SERIAL_LAUNCHER", severity="HIGH", evidence={}
+    )
+    assert escalated is True
+
+    signals = await repo.list_dev_risk_signals("DevWallet111")
+    assert [s.severity for s in signals] == ["HIGH"]
+
+
+async def test_delete_dev_risk_signal_removes_stale_pattern(session):
+    repo = WalletRepository(session)
+    await repo.upsert_dev_risk_signal(
+        creator_address="DevWallet111", pattern_type="SERIAL_LAUNCHER", severity="MEDIUM", evidence={}
+    )
+    await repo.delete_dev_risk_signal("DevWallet111", "SERIAL_LAUNCHER")
+    assert await repo.get_dev_risk_signal("DevWallet111", "SERIAL_LAUNCHER") is None

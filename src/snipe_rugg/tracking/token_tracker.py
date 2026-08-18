@@ -16,6 +16,8 @@ from snipe_rugg.core.events import NormalizedChainEvent, SubscriptionKind
 from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.decoder.constants import PUMP_FUN_PROGRAM, PUMPSWAP_PROGRAM
 from snipe_rugg.decoder.transaction_decoder import TransactionDecoder
+from snipe_rugg.dev.alerts import refresh_and_maybe_alert
+from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.launchpad.models import LaunchpadStatus
 from snipe_rugg.providers.base import TransactionProvider
 from snipe_rugg.tracking.wallet_tracker import AlertSink, token_mint_from_key
@@ -30,10 +32,12 @@ class TokenTracker:
         rpc: TransactionProvider,
         session_factory: async_sessionmaker[AsyncSession],
         alert_sink: AlertSink,
+        dev_monitor: DevMonitorService,
     ) -> None:
         self._rpc = rpc
         self._session_factory = session_factory
         self._alert_sink = alert_sink
+        self._dev_monitor = dev_monitor
         self._decoder = TransactionDecoder()
 
     async def handle_normalized_event(self, event: NormalizedChainEvent) -> None:
@@ -71,7 +75,21 @@ class TokenTracker:
             event.latency.persisted_at = utc_now()
             await session.commit()
 
-        if graduated_token is None or (wallet is not None and not wallet.alert_launches):
+        if graduated_token is None:
+            return
+
+        # Graduation moves this creator's graduation_rate / avg_seconds_to_graduation
+        # for real, so their profile is worth re-checking even when the alert
+        # itself is suppressed below (same watch-vs-alert split as elsewhere).
+        await refresh_and_maybe_alert(
+            dev_monitor=self._dev_monitor,
+            alert_sink=self._alert_sink,
+            session_factory=self._session_factory,
+            creator_address=graduated_token.creator_address,
+            latency=event.latency,
+        )
+
+        if wallet is not None and not wallet.alert_launches:
             return
 
         message_id = await self._alert_sink.send_graduation(token=graduated_token, wallet=wallet, latency=event.latency)

@@ -20,6 +20,8 @@ from snipe_rugg.db.repository import (
     WalletNotFound,
     WalletRepository,
 )
+from snipe_rugg.dev.patterns import assess_dev
+from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.providers.base import StreamingProvider
 from snipe_rugg.tracking.wallet_tracker import wallet_subscription_key
 
@@ -128,3 +130,41 @@ class WatchlistCommandService:
         if not wallets:
             return f"`{watchlist}` has no wallets yet."
         return "\n".join(f"{w.name or w.address} — `{w.address}`" for w in wallets)
+
+
+class DevCommandService:
+    """spec section 20-37: on-demand dev profile/risk lookup, independent of
+    whether any alert has ever fired for this address."""
+
+    def __init__(self, *, dev_monitor: DevMonitorService) -> None:
+        self._dev_monitor = dev_monitor
+
+    async def profile(self, creator_address: str) -> str:
+        profile = await self._dev_monitor.get_profile(creator_address)
+        if profile.total_launches == 0:
+            return f"No launches on record for `{creator_address}`."
+
+        lines = [f"Creator: `{creator_address}`"]
+        grad_suffix = f", {profile.graduation_rate:.0%}" if profile.graduation_rate is not None else ""
+        lines.append(f"Launches: {profile.total_launches} (graduated: {profile.graduated_count}{grad_suffix})")
+        if profile.first_launch_at is not None:
+            lines.append(f"First launch: {profile.first_launch_at.isoformat()}")
+        if profile.last_launch_at is not None:
+            lines.append(f"Last launch: {profile.last_launch_at.isoformat()}")
+        if profile.avg_seconds_between_launches is not None:
+            lines.append(f"Avg. time between launches: {profile.avg_seconds_between_launches:.0f}s")
+        if profile.avg_seconds_to_graduation is not None:
+            lines.append(f"Avg. time to graduation: {profile.avg_seconds_to_graduation:.0f}s")
+        if profile.early_sell_count:
+            lines.append(f"Early sells of its own launches: {profile.early_sell_count}")
+
+        assessment = assess_dev(profile)
+        if assessment.overall_severity is not None:
+            lines.append(f"\nOverall: {assessment.overall_severity.value}")
+            lines.extend(
+                f"  [{s.severity.value}] {s.pattern_type.value} — {s.label}: {s.description}"
+                for s in assessment.signals
+            )
+        else:
+            lines.append("\nNo repeated-pattern signals detected.")
+        return "\n".join(lines)

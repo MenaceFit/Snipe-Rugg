@@ -8,14 +8,17 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from snipe_rugg.core.clock import utc_now
 from snipe_rugg.db.models import (
     Alert,
+    DevRiskSignal,
     Token,
     TokenTrade,
     TrackedWallet,
     WalletActivity,
     WalletGroup,
     WalletGroupMember,
+    WalletSource,
     WalletStatus,
 )
 from snipe_rugg.decoder.models import NormalizedActivity, NormalizedTrade
@@ -49,6 +52,31 @@ class WalletRepository:
         self._session.add(wallet)
         await self._session.flush()
         return wallet
+
+    async def get_or_create_dev_wallet(self, address: str) -> tuple[TrackedWallet, bool]:
+        """Idempotent auto-tracking for a launch's creator address (spec section
+        20-37): unlike add_wallet, never raises on an existing row — a dev may
+        already be manually tracked, in which case their existing preferences are
+        left untouched. A freshly auto-discovered dev defaults to alert_buys/
+        alert_sells/alert_transfers off (their routine trading isn't something the
+        user asked to be paged for) but alert_launches on, since a further launch
+        from a known dev is exactly what this phase exists to catch. Returns
+        (wallet, created)."""
+        existing = await self.get_wallet(address)
+        if existing is not None:
+            return existing, False
+        wallet = TrackedWallet(
+            address=address,
+            status=WalletStatus.ACTIVE.value,
+            source=WalletSource.AUTO_DEV.value,
+            alert_buys=False,
+            alert_sells=False,
+            alert_transfers=False,
+            alert_launches=True,
+        )
+        self._session.add(wallet)
+        await self._session.flush()
+        return wallet, True
 
     async def get_wallet(self, address: str) -> TrackedWallet | None:
         result = await self._session.execute(select(TrackedWallet).where(TrackedWallet.address == address))
@@ -207,3 +235,60 @@ class WalletRepository:
         token.graduated_signature = signature
         await self._session.flush()
         return token
+
+    async def list_tokens_by_creator(self, creator_address: str) -> list[Token]:
+        result = await self._session.execute(
+            select(Token).where(Token.creator_address == creator_address).order_by(Token.first_seen_slot)
+        )
+        return list(result.scalars().all())
+
+    async def list_trades_for_wallet(self, wallet_address: str) -> list[TokenTrade]:
+        result = await self._session.execute(
+            select(TokenTrade).where(TokenTrade.wallet_address == wallet_address).order_by(TokenTrade.slot)
+        )
+        return list(result.scalars().all())
+
+    async def get_dev_risk_signal(self, creator_address: str, pattern_type: str) -> DevRiskSignal | None:
+        result = await self._session.execute(
+            select(DevRiskSignal).where(
+                DevRiskSignal.creator_address == creator_address, DevRiskSignal.pattern_type == pattern_type
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_dev_risk_signals(self, creator_address: str) -> list[DevRiskSignal]:
+        result = await self._session.execute(
+            select(DevRiskSignal).where(DevRiskSignal.creator_address == creator_address)
+        )
+        return list(result.scalars().all())
+
+    async def upsert_dev_risk_signal(
+        self, *, creator_address: str, pattern_type: str, severity: str, evidence: dict
+    ) -> tuple[DevRiskSignal, bool]:
+        """Insert or update the one row for (creator_address, pattern_type).
+        Returns (row, escalated) where escalated is True the first time this
+        pattern is seen for this creator, or when severity increases relative to
+        what was previously stored — the signal WalletTracker/TokenTracker use to
+        decide whether a fresh alert is warranted, so re-detecting the same
+        standing MEDIUM pattern on every subsequent launch doesn't spam Discord."""
+        existing = await self.get_dev_risk_signal(creator_address, pattern_type)
+        severity_rank = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+        if existing is None:
+            row = DevRiskSignal(
+                creator_address=creator_address, pattern_type=pattern_type, severity=severity, evidence=evidence
+            )
+            self._session.add(row)
+            await self._session.flush()
+            return row, True
+        escalated = severity_rank.get(severity, 0) > severity_rank.get(existing.severity, 0)
+        existing.severity = severity
+        existing.evidence = evidence
+        existing.updated_at = utc_now()
+        await self._session.flush()
+        return existing, escalated
+
+    async def delete_dev_risk_signal(self, creator_address: str, pattern_type: str) -> None:
+        existing = await self.get_dev_risk_signal(creator_address, pattern_type)
+        if existing is not None:
+            await self._session.delete(existing)
+            await self._session.flush()

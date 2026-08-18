@@ -116,6 +116,25 @@ see `ROADMAP.md`.
 - `tracking/token_tracker.py` — watches auto-subscribed mints for graduation
   to PumpSwap; single-transaction detection (see "Why balance deltas" below),
   not a cross-transaction state machine.
+- `launchpad/monitor.py` (`LaunchMonitor`) — network-wide Pump.fun launch
+  discovery: one `logsSubscribe(mentions=[PUMP_FUN_PROGRAM])` subscription
+  sees every launch on the platform, not just ones made by an
+  already-tracked wallet. Auto-tracks unknown creators (`WalletSource.AUTO_DEV`)
+  and subscribes to their wallet too, so their future activity keeps flowing
+  through the normal pipeline.
+- `alerts/sink.py` — the `AlertSink` Protocol (moved out of
+  `tracking/wallet_tracker.py` in Phase 4 so `dev/alerts.py` could depend on
+  it without importing `tracking/*` and risking a cycle; re-exported from
+  `wallet_tracker.py` for the existing import path).
+- `dev/profile.py`, `dev/patterns.py`, `dev/service.py`, `dev/alerts.py` — the
+  dev monitor (spec section 20-37, 56-59, 84): `build_profile()` turns
+  persisted `tokens`/`token_trades` rows into a `DevProfile` (pure function,
+  no DB); `assess_dev()` turns a profile into a `DevRiskAssessment` (pattern
+  thresholds, never a single-signal HIGH verdict — see "Rug-risk signal
+  design" below); `DevMonitorService` persists/upserts the result;
+  `dev/alerts.py`'s `refresh_and_maybe_alert()` is the one place
+  `WalletTracker`/`TokenTracker`/`LaunchMonitor` all call to decide whether a
+  profile change is alert-worthy.
 - `alerts/embeds.py` — Discord embed builders (trade/activity/launch/
   graduation); no USD or token name/ticker fields until a market-data /
   metadata provider exists to back them. "Age" on the launch embed is real
@@ -162,6 +181,23 @@ over time. Neither mechanism required decoding a single byte of Pump.fun's
 own instruction data, which is also exactly why token name/ticker aren't
 available: those only exist inside that opaque data (or a Metaplex metadata
 account this project doesn't fetch).
+
+## Rug-risk signal design (spec section 62)
+
+The one hard rule governing `dev/patterns.py`: never claim single-signal
+proof of fraud. That's enforced structurally, not just through label wording.
+Each of the four pattern detectors (`SERIAL_LAUNCHER`, `LOW_GRADUATION_RATE`,
+`RAPID_RELAUNCH`, `DEV_SOLD_OWN_LAUNCH`) can independently report HIGH
+severity for a creator address, but `assess_dev()`'s combination step only
+lets the *overall* assessment reach HIGH when at least two of those signals
+independently agree — a lone HIGH signal is still surfaced (callers can see
+it in `DevRiskAssessment.signals`), but the combined read is capped at
+MEDIUM. Alerting (`dev/alerts.py`) only fires on the combined read reaching
+HIGH, so a single pattern alone never produces a "HIGH-RISK REPEATED
+PATTERN" Discord alert — it takes corroboration. Labels are deliberately
+"HIGH-RISK REPEATED PATTERN" / "REPEATED PATTERN — WATCH", never "rugger",
+"scam", or "fraud" — this project observes and reports patterns, it doesn't
+adjudicate intent.
 
 ## Concurrency notes (read before touching `solana_ws.py`)
 

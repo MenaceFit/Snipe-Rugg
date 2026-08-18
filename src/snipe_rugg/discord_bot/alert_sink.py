@@ -8,12 +8,19 @@ import logging
 
 import discord
 
-from snipe_rugg.alerts.embeds import activity_embed, graduation_embed, launch_embed, trade_embed
+from snipe_rugg.alerts.embeds import (
+    activity_embed,
+    dev_risk_embed,
+    graduation_embed,
+    launch_embed,
+    trade_embed,
+)
+from snipe_rugg.alerts.sink import BusinessEvent
 from snipe_rugg.core.events import LatencyTrace
 from snipe_rugg.db.models import Token, TrackedWallet
 from snipe_rugg.decoder.models import NormalizedTrade
+from snipe_rugg.dev.models import DevRiskAssessment
 from snipe_rugg.launchpad.models import LaunchEvent
-from snipe_rugg.tracking.wallet_tracker import BusinessEvent
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +46,13 @@ class DiscordAlertSink:
     async def send_graduation(self, *, token: Token, wallet: TrackedWallet | None, latency: LatencyTrace) -> str | None:
         wallet_label = (wallet.name or wallet.address) if wallet is not None else None
         embed = graduation_embed(token, wallet_label=wallet_label, latency=latency)
+        return await self._send_embed(embed)
+
+    async def send_dev_risk(
+        self, *, wallet: TrackedWallet | None, assessment: DevRiskAssessment, latency: LatencyTrace
+    ) -> str | None:
+        wallet_label = (wallet.name or wallet.address) if wallet is not None else None
+        embed = dev_risk_embed(assessment, wallet_label=wallet_label)
         return await self._send_embed(embed)
 
     async def _send_embed(self, embed: discord.Embed) -> str | None:
