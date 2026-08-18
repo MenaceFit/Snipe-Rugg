@@ -1,7 +1,8 @@
 """Full bot entrypoint: Phase 1's real-time core wired into Phase 2's wallet
-tracking and Discord alerting. This is what actually satisfies spec section
-152's success criteria end-to-end (add a wallet, see its activity, get an
-alert) — main.py stays the Phase-1-only demo it always was.
+tracking, Phase 3's launch/graduation tracking, and Discord alerting. This is
+what actually satisfies spec section 152's success criteria end-to-end (add a
+wallet, see its activity, get an alert) — main.py stays the Phase-1-only demo
+it always was.
 
 Requires DISCORD_TOKEN and DISCORD_ALERT_CHANNEL_ID; see .env.example.
 
@@ -28,7 +29,12 @@ from snipe_rugg.providers.helius_ws import HeliusWebSocketProvider
 from snipe_rugg.providers.manager import ProviderManager
 from snipe_rugg.providers.rpc_http import SolanaRpcHttpClient
 from snipe_rugg.providers.solana_ws import SolanaWebSocketProvider
-from snipe_rugg.tracking.wallet_tracker import WalletTracker, wallet_subscription_key
+from snipe_rugg.tracking.token_tracker import TokenTracker
+from snipe_rugg.tracking.wallet_tracker import (
+    WalletTracker,
+    token_subscription_key,
+    wallet_subscription_key,
+)
 
 logger = logging.getLogger("snipe_rugg.bot_main")
 
@@ -61,8 +67,10 @@ async def run() -> None:
         watchlist_service=WatchlistCommandService(session_factory=session_factory),
     )
     alert_sink = DiscordAlertSink(bot, channel_id=settings.discord_alert_channel_id)
-    tracker = WalletTracker(rpc=rpc, session_factory=session_factory, alert_sink=alert_sink)
-    bus.subscribe(TOPIC_NORMALIZED_EVENT, tracker.handle_normalized_event)
+    wallet_tracker = WalletTracker(rpc=rpc, provider=manager, session_factory=session_factory, alert_sink=alert_sink)
+    token_tracker = TokenTracker(rpc=rpc, session_factory=session_factory, alert_sink=alert_sink)
+    bus.subscribe(TOPIC_NORMALIZED_EVENT, wallet_tracker.handle_normalized_event)
+    bus.subscribe(TOPIC_NORMALIZED_EVENT, token_tracker.handle_normalized_event)
 
     async def on_reconnect(_: StreamingProvider) -> None:
         async with session_factory() as session:
@@ -78,10 +86,17 @@ async def run() -> None:
     await manager.start()
 
     async with session_factory() as session:
-        active_wallets = await WalletRepository(session).list_active_wallets()
+        repo = WalletRepository(session)
+        active_wallets = await repo.list_active_wallets()
+        ungraduated_tokens = await repo.list_ungraduated_tokens()
     for wallet in active_wallets:
         await manager.subscribe_logs(mentions=[wallet.address], key=wallet_subscription_key(wallet.address))
-    logger.info("resumed_tracking", extra={"fields": {"wallet_count": len(active_wallets)}})
+    for token in ungraduated_tokens:
+        await manager.subscribe_logs(mentions=[token.mint], key=token_subscription_key(token.mint))
+    logger.info(
+        "resumed_tracking",
+        extra={"fields": {"wallet_count": len(active_wallets), "token_count": len(ungraduated_tokens)}},
+    )
 
     try:
         await bot.start(settings.discord_token)

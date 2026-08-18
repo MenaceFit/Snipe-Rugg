@@ -1,0 +1,47 @@
+{
+  "slot": 300000006,
+  "blockTime": 1755000600,
+  "version": 0,
+  "transaction": {
+    "signatures": ["PumpFunGraduationTxSignature11111111111111111111111111111"],
+    "message": {
+      "accountKeys": [
+        { "pubkey": "MigratorAccount111111111111111111111111111", "signer": true, "writable": true, "source": "transaction" },
+        { "pubkey": "NewPumpMintAccount1111111111111111111111111", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "BondingCurveAccount111111111111111111111111", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "NewPumpSwapPoolAccount111111111111111111111", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA", "signer": false, "writable": false, "source": "transaction" }
+      ],
+      "recentBlockhash": "11111111111111111111111111111111111111111",
+      "instructions": [
+        {
+          "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+          "accounts": ["NewPumpMintAccount1111111111111111111111111", "BondingCurveAccount111111111111111111111111"],
+          "data": "opaqueBase58PumpFunMigrateInstructionData"
+        },
+        {
+          "programId": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+          "accounts": ["NewPumpMintAccount1111111111111111111111111", "NewPumpSwapPoolAccount111111111111111111111"],
+          "data": "opaqueBase58PumpSwapCreatePoolInstructionData"
+        }
+      ]
+    }
+  },
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "preBalances": [1000000000, 0, 85000000000, 0, 0, 0],
+    "postBalances": [999995000, 0, 0, 85000000000, 0, 0],
+    "preTokenBalances": [],
+    "postTokenBalances": [],
+    "innerInstructions": [],
+    "logMessages": [
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P success",
+      "Program pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA invoke [1]",
+      "Program pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA success"
+    ],
+    "computeUnitsConsumed": 120000
+  }
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -14,6 +15,7 @@ from snipe_rugg.db.repository import (
     WalletRepository,
 )
 from snipe_rugg.decoder.models import EventType, NormalizedActivity, NormalizedTrade
+from snipe_rugg.launchpad.models import LaunchEvent, LaunchpadStatus
 
 
 @pytest.fixture
@@ -132,3 +134,47 @@ async def test_record_activity_persists_details(session):
     row = await repo.record_activity(activity)
     assert row.event_type == "TRANSFER"
     assert row.details == {"note": "test"}
+
+
+def _launch_event(mint="MintXXXX", creator="DevWallet111") -> LaunchEvent:
+    return LaunchEvent(
+        mint=mint, creator=creator, launchpad="Pump.fun", pair="SOL", slot=1, block_time=None, signature="sig-launch"
+    )
+
+
+async def test_record_token_launch_defaults_to_bonding_curve(session):
+    repo = WalletRepository(session)
+    token = await repo.record_token_launch(_launch_event())
+
+    assert token.status == LaunchpadStatus.BONDING_CURVE.value
+    assert token.creator_address == "DevWallet111"
+    assert token.launchpad == "Pump.fun"
+
+    fetched = await repo.get_token("MintXXXX")
+    assert fetched is not None
+    assert fetched.mint == "MintXXXX"
+
+
+async def test_record_token_launch_is_idempotent_for_the_same_mint(session):
+    repo = WalletRepository(session)
+    first = await repo.record_token_launch(_launch_event())
+    second = await repo.record_token_launch(_launch_event())
+    assert first.id == second.id
+
+
+async def test_mark_graduated_updates_status_and_timestamps(session):
+    repo = WalletRepository(session)
+    await repo.record_token_launch(_launch_event())
+
+    graduated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    token = await repo.mark_graduated("MintXXXX", slot=999, block_time=graduated_at)
+
+    assert token is not None
+    assert token.status == LaunchpadStatus.GRADUATED.value
+    assert token.graduated_slot == 999
+    assert token.graduated_at == graduated_at
+
+
+async def test_mark_graduated_unknown_mint_returns_none(session):
+    repo = WalletRepository(session)
+    assert await repo.mark_graduated("GhostMint", slot=1, block_time=None) is None

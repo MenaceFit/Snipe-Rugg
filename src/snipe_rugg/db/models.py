@@ -1,10 +1,10 @@
-"""SQLAlchemy models for wallet tracking (spec section 70, Phase 2 subset).
-
-Only the tables Phase 2 needs: tracked_wallets, wallet_groups,
-wallet_group_members, token_trades, wallet_activity, alerts. Everything else in
-spec section 70 (tokens, launches, creators, creator_clusters, strategy_signals,
-paper_trades, positions, portfolio_snapshots, known_entities, api_sources)
-belongs to a later phase and is added when that phase actually needs it.
+"""SQLAlchemy models for wallet and token tracking (spec section 70, Phase 2-3
+subset). Only the tables built so far: tracked_wallets, wallet_groups,
+wallet_group_members, token_trades, wallet_activity, alerts, tokens.
+Everything else in spec section 70 (launches, creators, creator_clusters,
+strategy_signals, paper_trades, positions, portfolio_snapshots, known_entities,
+api_sources) belongs to a later phase and is added when that phase actually
+needs it.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from snipe_rugg.core.clock import utc_now
 from snipe_rugg.db.base import Base
+from snipe_rugg.launchpad.models import LaunchpadStatus
 
 
 class WalletStatus(str, enum.Enum):
@@ -123,3 +124,22 @@ class Alert(Base):
     discord_message_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     total_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class Token(Base):
+    __tablename__ = "tokens"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    mint: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    creator_address: Mapped[str] = mapped_column(String(64), index=True)
+    launchpad: Mapped[str] = mapped_column(String(32))
+    pair: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default=LaunchpadStatus.BONDING_CURVE.value)
+
+    first_seen_slot: Mapped[int] = mapped_column()
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    graduated_slot: Mapped[int | None] = mapped_column(nullable=True)
+    graduated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    graduated_signature: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

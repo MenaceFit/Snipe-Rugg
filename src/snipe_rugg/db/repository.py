@@ -3,11 +3,14 @@ commands and the wallet tracker service both go through, so neither touches a
 SQLAlchemy session directly."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from snipe_rugg.db.models import (
     Alert,
+    Token,
     TokenTrade,
     TrackedWallet,
     WalletActivity,
@@ -16,6 +19,7 @@ from snipe_rugg.db.models import (
     WalletStatus,
 )
 from snipe_rugg.decoder.models import NormalizedActivity, NormalizedTrade
+from snipe_rugg.launchpad.models import LaunchEvent, LaunchpadStatus
 
 
 class WalletAlreadyTracked(Exception):
@@ -165,3 +169,41 @@ class WalletRepository:
         self._session.add(row)
         await self._session.flush()
         return row
+
+    async def get_token(self, mint: str) -> Token | None:
+        result = await self._session.execute(select(Token).where(Token.mint == mint))
+        return result.scalar_one_or_none()
+
+    async def list_ungraduated_tokens(self) -> list[Token]:
+        result = await self._session.execute(select(Token).where(Token.status != LaunchpadStatus.GRADUATED.value))
+        return list(result.scalars().all())
+
+    async def record_token_launch(self, event: LaunchEvent) -> Token:
+        existing = await self.get_token(event.mint)
+        if existing is not None:
+            return existing
+        row = Token(
+            mint=event.mint,
+            creator_address=event.creator,
+            launchpad=event.launchpad,
+            pair=event.pair,
+            status=LaunchpadStatus.BONDING_CURVE.value,
+            first_seen_slot=event.slot,
+            first_seen_at=event.block_time,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return row
+
+    async def mark_graduated(
+        self, mint: str, *, slot: int, block_time: datetime | None, signature: str | None = None
+    ) -> Token | None:
+        token = await self.get_token(mint)
+        if token is None:
+            return None
+        token.status = LaunchpadStatus.GRADUATED.value
+        token.graduated_slot = slot
+        token.graduated_at = block_time
+        token.graduated_signature = signature
+        await self._session.flush()
+        return token

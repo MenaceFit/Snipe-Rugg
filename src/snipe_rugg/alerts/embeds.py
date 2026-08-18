@@ -1,17 +1,26 @@
-"""Discord embed builders for wallet activity alerts (spec section 26/30).
+"""Discord embed builders for wallet activity alerts (spec section 26/30/17/60).
 
-USD estimates and token age are deliberately absent: both need a market-data /
-token-metadata provider (Phase 3), and this module never fabricates a number it
-doesn't have real data for. Large-sell-percentage and dev-labeled alerts (spec
-section 31-33) need position-size and creator-identity context that doesn't
-exist until the dev monitor (Phase 4) — not implemented here either.
+USD estimates and token name/ticker are deliberately absent: both need a
+market-data / token-metadata provider (Phase 3's own remaining work — see
+launchpad/detector.py's docstring for why ticker resolution specifically isn't
+attempted yet), and this module never fabricates a value it doesn't have real
+data for. "Age" is the one exception that looks like it might be invented but
+isn't: it's computed from the transaction's actual block_time versus now, at
+the moment the embed is built — a real measurement, not a guess. Large-sell-
+percentage and dev-labeled alerts (spec section 31-33) need position-size and
+creator-identity context that doesn't exist until the dev monitor (Phase 4).
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 import discord
 
+from snipe_rugg.core.clock import utc_now
 from snipe_rugg.core.events import LatencyTrace
+from snipe_rugg.db.models import Token
 from snipe_rugg.decoder.models import EventType, NormalizedActivity, NormalizedTrade
+from snipe_rugg.launchpad.models import LaunchEvent, LaunchpadStatus
 
 _TRADE_COLOR = {
     EventType.BUY: discord.Color.green(),
@@ -97,6 +106,47 @@ def activity_embed(activity: NormalizedActivity, *, wallet_label: str, latency: 
     if activity.block_time is not None:
         embed.timestamp = activity.block_time
     return embed
+
+
+def launch_embed(launch: LaunchEvent, *, wallet_label: str, latency: LatencyTrace) -> discord.Embed:
+    embed = discord.Embed(title="🚨 DEV LAUNCH DETECTED", color=discord.Color.gold())
+    embed.add_field(name="Wallet", value=wallet_label, inline=True)
+    embed.add_field(name="Mint", value=_asset_label(launch.mint), inline=True)
+    embed.add_field(name="Launchpad", value=launch.launchpad, inline=True)
+    if launch.pair:
+        embed.add_field(name="Pair", value=launch.pair, inline=True)
+    embed.add_field(name="Status", value="BONDING CURVE", inline=True)
+    age = _age_seconds(launch.block_time)
+    if age is not None:
+        embed.add_field(name="Age", value=f"{age:.1f} sec", inline=True)
+    _add_latency_fields(embed, latency)
+    embed.add_field(name="TX", value=f"[View]({_explorer_url(launch.signature)})", inline=False)
+    if launch.block_time is not None:
+        embed.timestamp = launch.block_time
+    return embed
+
+
+def graduation_embed(token: Token, *, wallet_label: str | None, latency: LatencyTrace) -> discord.Embed:
+    embed = discord.Embed(title="🎓 GRADUATED", color=discord.Color.purple())
+    if wallet_label:
+        embed.add_field(name="Wallet", value=wallet_label, inline=True)
+    embed.add_field(name="Mint", value=_asset_label(token.mint), inline=True)
+    embed.add_field(name="Launchpad", value=token.launchpad, inline=True)
+    embed.add_field(name="Status", value=LaunchpadStatus.GRADUATED.value.upper(), inline=True)
+    if token.graduated_slot is not None:
+        embed.add_field(name="Slot", value=str(token.graduated_slot), inline=True)
+    _add_latency_fields(embed, latency)
+    if token.graduated_signature:
+        embed.add_field(name="TX", value=f"[View]({_explorer_url(token.graduated_signature)})", inline=False)
+    if token.graduated_at is not None:
+        embed.timestamp = token.graduated_at
+    return embed
+
+
+def _age_seconds(block_time: datetime | None) -> float | None:
+    if block_time is None:
+        return None
+    return (utc_now() - block_time).total_seconds()
 
 
 def _add_latency_fields(embed: discord.Embed, latency: LatencyTrace) -> None:

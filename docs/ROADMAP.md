@@ -59,10 +59,10 @@ Spec sections 7–15, 23–30, 63, 70 (subset).
   tested directly; `discord_bot/bot.py` is just the `app_commands` wiring on
   top of it.
 - Alert embeds with the real measured latency breakdown from spec section 4.
-  USD estimates and token age are deliberately absent (need a market-data /
-  token-metadata provider — Phase 3); large-sell-% and dev-labeled alerts need
-  position-size and creator-identity context that doesn't exist until the dev
-  monitor (Phase 4).
+  USD estimates and token name/ticker are deliberately absent (need a
+  market-data / token-metadata provider — still not implemented, see Phase 3
+  below); large-sell-% and dev-labeled alerts need position-size and
+  creator-identity context that doesn't exist until the dev monitor (Phase 4).
 - Full composition root: `python -m snipe_rugg.bot_main` (needs `DISCORD_TOKEN`
   and `DISCORD_ALERT_CHANNEL_ID`).
 
@@ -72,16 +72,50 @@ token in-session) — the command/decoder/classifier/tracker logic is
 extensively tested locally, but running the bot for real needs to happen
 outside this sandbox.
 
-## Phase 3 — Token detector — not started
+## Phase 3 — Token detector — **done**
 
-Spec sections 16–19, 60, 149.
+Spec sections 16–18, 60.
 
-- `PumpFunLaunchDetector` (priority 1) behind a `LaunchpadDetector` interface
-  so other launchpads can be added without rewriting the tracker.
-- Creator/launch detection, graduation/migration/pool-creation detection.
-- Token metadata provider integration (verify current docs/rate limits/pricing
-  before implementing each one, per spec section 101 — the API matrix below is
-  a starting point, not a substitute for checking at implementation time).
+- `LaunchpadDetector` interface with `PumpFunLaunchDetector` (priority 1, spec
+  section 18) and a `GenericTokenCreationDetector` fallback. Pump.fun's `create`
+  instruction is custom Anchor data this project doesn't decode (see
+  `ARCHITECTURE.md` for why) — the mint address instead comes from the SPL
+  `initializeMint2` instruction `create` always invokes as a CPI, which the RPC
+  already parses. Creator is the transaction signer; Pump.fun's rare
+  creator-≠-user free-mint flow isn't distinguished. No token name/symbol/ticker
+  — those only exist in Pump.fun's opaque instruction data or a Metaplex
+  metadata account this project doesn't fetch (a real, documented gap, not a
+  silent one).
+- `tokens` DB table (mint, creator, launchpad, pair, status, first/graduated
+  slot+time+signature). `WalletTracker` now also runs launch detection after
+  classifying a tracked wallet's transaction: it always persists a detected
+  launch and auto-subscribes to the mint (regardless of alert preference —
+  watching is a data-completeness concern, separate from notification), and
+  sends the "🚨 DEV LAUNCH DETECTED" alert only when the wallet's
+  `alert_launches` is on.
+- `TokenTracker`: new tracker watching auto-subscribed mints for graduation
+  (spec section 60). Detection is single-transaction, not stateful across
+  many: a Pump.fun `migrate` and a PumpSwap `create_pool` land in the same
+  transaction, so graduation is just "does this transaction touch both
+  program IDs." Sends "🎓 GRADUATED" through the same `AlertSink` (extended
+  with `send_launch`/`send_graduation` alongside the existing `send`), gated
+  the same way (always persisted, alert only if the creator's
+  `alert_launches` is on, or unconditionally if the creator wallet is no
+  longer tracked).
+- `bot_main.py` now subscribes both trackers to the event bus and, on
+  startup, resubscribes not just active wallets but every ungraduated token
+  too — so graduation tracking survives a restart the same way wallet
+  tracking already did.
+- Token metadata provider integration (name/ticker/USD, e.g. via Solscan /
+  DEX Screener / Birdeye / on-chain Metaplex metadata) is explicitly **not**
+  done — verify current docs/rate limits/pricing before implementing any of
+  them, per spec section 101; `API_MATRIX.md` is a starting point, not a
+  substitute for checking at implementation time.
+
+Not validated against live mainnet from within a development session (same
+constraint as Phases 1-2): the launch and graduation fixtures are realistic
+but synthetic, built from verified program IDs and documented instruction
+shapes rather than captured from an actual mainnet transaction.
 
 ## Phase 4 — Dev monitor — not started
 

@@ -100,20 +100,32 @@ see `ROADMAP.md`.
   that keeps a self-mint from looking like a BUY.
 - `db/` — async SQLAlchemy: `base.py` (engine/session), `models.py`
   (`tracked_wallets`, `wallet_groups`, `wallet_group_members`, `token_trades`,
-  `wallet_activity`, `alerts`), `repository.py` (the only thing that touches a
-  session directly).
+  `wallet_activity`, `alerts`, `tokens`), `repository.py` (the only thing that
+  touches a session directly).
+- `launchpad/detector.py` — which platform (if any) a transaction created a
+  new token on: `PumpFunLaunchDetector` (priority 1) then
+  `GenericTokenCreationDetector`, composed by `detect_launch()`. See "Why
+  balance deltas" below for why Pump.fun detection reads the SPL
+  `initializeMint2` CPI instead of decoding Pump.fun's own instruction.
 - `tracking/wallet_tracker.py` — consumes `"chain.normalized_event"`, fetches
   the full transaction for a tracked wallet's logs notification, decodes,
   classifies, persists, and alerts through an `AlertSink` protocol it doesn't
-  know is backed by Discord.
-- `alerts/embeds.py` — Discord embed builders; no USD/age fields until a
-  market-data provider exists to back them.
+  know is backed by Discord. Also runs launch detection and, on a launch,
+  auto-subscribes to the new mint (`token:{mint}` key) so `token_tracker.py`
+  picks up its graduation later.
+- `tracking/token_tracker.py` — watches auto-subscribed mints for graduation
+  to PumpSwap; single-transaction detection (see "Why balance deltas" below),
+  not a cross-transaction state machine.
+- `alerts/embeds.py` — Discord embed builders (trade/activity/launch/
+  graduation); no USD or token name/ticker fields until a market-data /
+  metadata provider exists to back them. "Age" on the launch embed is real
+  (computed from block_time vs now at build time), not the same kind of gap.
 - `discord_bot/services.py` — `/wallet` and `/watchlist` command logic as
   plain async methods, independent of discord.py's `Interaction` machinery.
 - `discord_bot/bot.py` / `discord_bot/alert_sink.py` — the `app_commands`
   wiring and the concrete `AlertSink` that actually posts to a channel; the
-  only two files in Phase 2 that import `discord`.
-- `bot_main.py` — the full composition root (Phase 1 + Phase 2) that a real
+  only two files that import `discord` outside of `bot_main.py` itself.
+- `bot_main.py` — the full composition root (Phases 1-3) that a real
   deployment runs.
 
 ## Why balance deltas, not per-program instruction parsing
@@ -136,6 +148,20 @@ classifier refuses to call anything a trade unless a program outside a fixed
 "wallet infrastructure" set (System/Token/Token-2022/AssociatedToken/Stake)
 was actually invoked (`constants.has_external_program`); see
 `test_self_mint_is_not_misclassified_as_a_buy` in the test suite.
+
+The same "read what's already parsed instead of decoding opaque data" idea
+carries into launch and graduation detection (`launchpad/detector.py`,
+`tracking/token_tracker.py`): Pump.fun's `create` instruction is unparsed
+custom Anchor data, but it always invokes SPL Token's `initializeMint2` as a
+CPI to actually create the mint — and *that* instruction is parsed, so the
+mint address comes from there. Graduation is detected the same
+low-effort way: Pump.fun's `migrate` and PumpSwap's `create_pool` land in a
+single transaction together, so "did this transaction touch both program
+IDs" is sufficient — no need to correlate state across multiple transactions
+over time. Neither mechanism required decoding a single byte of Pump.fun's
+own instruction data, which is also exactly why token name/ticker aren't
+available: those only exist inside that opaque data (or a Metaplex metadata
+account this project doesn't fetch).
 
 ## Concurrency notes (read before touching `solana_ws.py`)
 

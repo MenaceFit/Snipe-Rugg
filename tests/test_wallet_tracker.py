@@ -12,10 +12,11 @@ from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.decoder.models import EventType, NormalizedTrade
 from snipe_rugg.tracking.wallet_tracker import (
     WalletTracker,
+    token_subscription_key,
     wallet_address_from_key,
     wallet_subscription_key,
 )
-from tests.helpers import load_fixture
+from tests.helpers import FakeStreamingProvider, load_fixture
 
 
 class FakeRpc:
@@ -35,10 +36,20 @@ class FakeRpc:
 class FakeAlertSink:
     def __init__(self):
         self.sent = []
+        self.launches = []
+        self.graduations = []
 
     async def send(self, *, wallet, event, latency):
         self.sent.append((wallet, event))
         return "fake-message-id"
+
+    async def send_launch(self, *, wallet, launch, latency):
+        self.launches.append((wallet, launch))
+        return "fake-launch-message-id"
+
+    async def send_graduation(self, *, token, wallet, latency):
+        self.graduations.append((token, wallet))
+        return "fake-graduation-message-id"
 
 
 def _chain_event(*, signature: str, subscription_key: str, err=None) -> NormalizedChainEvent:
@@ -70,6 +81,15 @@ async def session_factory():
     await engine.dispose()
 
 
+def _tracker(session_factory, *, rpc, sink=None, provider=None):
+    return WalletTracker(
+        rpc=rpc,
+        provider=provider or FakeStreamingProvider(),
+        session_factory=session_factory,
+        alert_sink=sink or FakeAlertSink(),
+    )
+
+
 def test_wallet_subscription_key_roundtrip():
     key = wallet_subscription_key("Wallet111")
     assert key == "wallet:Wallet111"
@@ -86,7 +106,7 @@ async def test_buy_is_persisted_and_alerted(session_factory):
     raw_tx = load_fixture("tx_buy_pumpswap.json")
     rpc = FakeRpc({raw_tx["transaction"]["signatures"][0]: raw_tx})
     sink = FakeAlertSink()
-    tracker = WalletTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = _tracker(session_factory, rpc=rpc, sink=sink)
 
     event = _chain_event(
         signature=raw_tx["transaction"]["signatures"][0], subscription_key=wallet_subscription_key(wallet_address)
@@ -109,7 +129,7 @@ async def test_untracked_wallet_is_ignored(session_factory):
     raw_tx = load_fixture("tx_buy_pumpswap.json")
     rpc = FakeRpc({raw_tx["transaction"]["signatures"][0]: raw_tx})
     sink = FakeAlertSink()
-    tracker = WalletTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = _tracker(session_factory, rpc=rpc, sink=sink)
 
     event = _chain_event(
         signature=raw_tx["transaction"]["signatures"][0],
@@ -131,7 +151,7 @@ async def test_paused_wallet_is_not_alerted(session_factory):
     raw_tx = load_fixture("tx_buy_pumpswap.json")
     rpc = FakeRpc({raw_tx["transaction"]["signatures"][0]: raw_tx})
     sink = FakeAlertSink()
-    tracker = WalletTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = _tracker(session_factory, rpc=rpc, sink=sink)
 
     event = _chain_event(
         signature=raw_tx["transaction"]["signatures"][0], subscription_key=wallet_subscription_key(wallet_address)
@@ -152,7 +172,7 @@ async def test_alert_buys_false_suppresses_buy_alert(session_factory):
     raw_tx = load_fixture("tx_buy_pumpswap.json")
     rpc = FakeRpc({raw_tx["transaction"]["signatures"][0]: raw_tx})
     sink = FakeAlertSink()
-    tracker = WalletTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = _tracker(session_factory, rpc=rpc, sink=sink)
 
     event = _chain_event(
         signature=raw_tx["transaction"]["signatures"][0], subscription_key=wallet_subscription_key(wallet_address)
@@ -174,7 +194,7 @@ async def test_failed_transaction_signature_is_skipped(session_factory):
 
     sink = FakeAlertSink()
     rpc = FakeRpc({})
-    tracker = WalletTracker(rpc=rpc, session_factory=session_factory, alert_sink=sink)
+    tracker = _tracker(session_factory, rpc=rpc, sink=sink)
 
     event = _chain_event(
         signature="sig-failed",
@@ -184,3 +204,71 @@ async def test_failed_transaction_signature_is_skipped(session_factory):
     await tracker.handle_normalized_event(event)
 
     assert sink.sent == []
+
+
+async def test_pumpfun_launch_is_persisted_alerted_and_auto_subscribed(session_factory):
+    dev_wallet = "DevWallet111111111111111111111111111111111"
+    async with session_factory() as session:
+        await WalletRepository(session).add_wallet(dev_wallet, name="DEV_ORANGE")
+        await session.commit()
+
+    raw_tx = load_fixture("tx_pumpfun_launch.json")
+    rpc = FakeRpc({raw_tx["transaction"]["signatures"][0]: raw_tx})
+    sink = FakeAlertSink()
+    provider = FakeStreamingProvider()
+    tracker = _tracker(session_factory, rpc=rpc, sink=sink, provider=provider)
+
+    event = _chain_event(
+        signature=raw_tx["transaction"]["signatures"][0], subscription_key=wallet_subscription_key(dev_wallet)
+    )
+    await tracker.handle_normalized_event(event)
+
+    assert len(sink.launches) == 1
+    launch_wallet, launch = sink.launches[0]
+    assert launch_wallet.address == dev_wallet
+    assert launch.mint == "NewPumpMintAccount1111111111111111111111111"
+    assert launch.launchpad == "Pump.fun"
+
+    auto_subscribe_calls = [c for c in provider.calls if c[0] == "subscribe_logs"]
+    assert auto_subscribe_calls == [
+        (
+            "subscribe_logs",
+            (),
+            {
+                "mentions": [launch.mint],
+                "commitment": "confirmed",
+                "key": token_subscription_key(launch.mint),
+            },
+        )
+    ]
+
+    async with session_factory() as session:
+        token = await WalletRepository(session).get_token(launch.mint)
+        assert token is not None
+        assert token.creator_address == dev_wallet
+
+
+async def test_launch_not_alerted_when_wallet_disables_launch_alerts(session_factory):
+    dev_wallet = "DevWallet111111111111111111111111111111111"
+    async with session_factory() as session:
+        repo = WalletRepository(session)
+        wallet = await repo.add_wallet(dev_wallet)
+        wallet.alert_launches = False
+        await session.commit()
+
+    raw_tx = load_fixture("tx_pumpfun_launch.json")
+    rpc = FakeRpc({raw_tx["transaction"]["signatures"][0]: raw_tx})
+    sink = FakeAlertSink()
+    provider = FakeStreamingProvider()
+    tracker = _tracker(session_factory, rpc=rpc, sink=sink, provider=provider)
+
+    event = _chain_event(
+        signature=raw_tx["transaction"]["signatures"][0], subscription_key=wallet_subscription_key(dev_wallet)
+    )
+    await tracker.handle_normalized_event(event)
+
+    assert sink.launches == []
+    # still watched for graduation even though the alert itself was suppressed
+    assert any(c[0] == "subscribe_logs" for c in provider.calls)
+    async with session_factory() as session:
+        assert await WalletRepository(session).get_token("NewPumpMintAccount1111111111111111111111111") is not None
