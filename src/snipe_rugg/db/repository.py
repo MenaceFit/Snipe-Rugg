@@ -248,6 +248,12 @@ class WalletRepository:
         )
         return list(result.scalars().all())
 
+    async def list_activity_for_wallet(self, wallet_address: str) -> list[WalletActivity]:
+        result = await self._session.execute(
+            select(WalletActivity).where(WalletActivity.wallet_address == wallet_address).order_by(WalletActivity.slot)
+        )
+        return list(result.scalars().all())
+
     async def get_dev_risk_signal(self, creator_address: str, pattern_type: str) -> DevRiskSignal | None:
         result = await self._session.execute(
             select(DevRiskSignal).where(

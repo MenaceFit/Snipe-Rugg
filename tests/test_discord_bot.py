@@ -7,15 +7,19 @@ from __future__ import annotations
 from snipe_rugg.discord_bot.bot import DevGroup, WalletGroup, WatchlistGroup
 from snipe_rugg.discord_bot.services import (
     DevCommandService,
+    GraphCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
 
 
 def test_wallet_group_exposes_expected_subcommands():
-    group = WalletGroup(WalletCommandService(session_factory=None, provider=None))  # type: ignore[arg-type]
+    group = WalletGroup(
+        WalletCommandService(session_factory=None, provider=None),  # type: ignore[arg-type]
+        GraphCommandService(graph_service=None),  # type: ignore[arg-type]
+    )
     names = {c.name for c in group.commands}
-    assert names == {"add", "remove", "list", "info", "pause", "resume"}
+    assert names == {"add", "remove", "list", "info", "pause", "resume", "graph"}
 
 
 def test_watchlist_group_exposes_expected_subcommands():

@@ -22,6 +22,9 @@ from snipe_rugg.db.repository import (
 )
 from snipe_rugg.dev.patterns import assess_dev
 from snipe_rugg.dev.service import DevMonitorService
+from snipe_rugg.graph.analysis import funded_by, funders_of, shares_a_funder_with
+from snipe_rugg.graph.render import render_bubble_map
+from snipe_rugg.graph.service import GraphService
 from snipe_rugg.providers.base import StreamingProvider
 from snipe_rugg.tracking.wallet_tracker import wallet_subscription_key
 
@@ -168,3 +171,32 @@ class DevCommandService:
         else:
             lines.append("\nNo repeated-pattern signals detected.")
         return "\n".join(lines)
+
+
+class GraphCommandService:
+    """spec section 64-69, 122, 144-145: wallet relationship graph, rendered
+    as a bubble map. Text summary comes from graph/analysis.py's funder
+    correlation; the PNG is graph/render.py's direct rendering of the same
+    graph - both describe exactly the same underlying edges, nothing extra."""
+
+    def __init__(self, *, graph_service: GraphService) -> None:
+        self._graph_service = graph_service
+
+    async def graph(self, address: str) -> tuple[str, bytes]:
+        graph = await self._graph_service.build_context_graph(address)
+
+        lines = [f"Relationship graph for `{address}` ({graph.number_of_nodes()} nodes)"]
+        funders = funders_of(graph, address)
+        funded = funded_by(graph, address)
+        shared = sorted(shares_a_funder_with(graph, address))
+        if funders:
+            lines.append("Funded by: " + ", ".join(funders))
+        if funded:
+            lines.append("Funded: " + ", ".join(funded))
+        if shared:
+            lines.append("Shares a funder with: " + ", ".join(shared))
+        if not funders and not funded:
+            lines.append("No SOL funding relationships on record for this address yet.")
+
+        png_bytes = render_bubble_map(graph, focus=address)
+        return "\n".join(lines), png_bytes

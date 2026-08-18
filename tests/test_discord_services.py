@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from sqlalchemy.pool import StaticPool
 
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
 from snipe_rugg.db.repository import WalletRepository
+from snipe_rugg.decoder.models import EventType, NormalizedActivity
 from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.discord_bot.services import (
     DevCommandService,
+    GraphCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
+from snipe_rugg.graph.service import GraphService
 from snipe_rugg.launchpad.models import LaunchEvent
 from snipe_rugg.tracking.wallet_tracker import wallet_subscription_key
 from tests.helpers import FakeStreamingProvider
@@ -137,6 +142,31 @@ async def test_dev_profile_reports_no_launches_for_unknown_creator(session_facto
     service = DevCommandService(dev_monitor=DevMonitorService(session_factory))
     reply = await service.profile("GhostCreator111")
     assert "No launches on record" in reply
+
+
+async def test_graph_command_reports_no_funding_for_isolated_wallet(session_factory):
+    service = GraphCommandService(graph_service=GraphService(session_factory))
+    text, png_bytes = await service.graph("LonelyWallet111")
+    assert "No SOL funding relationships" in text
+    assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+async def test_graph_command_lists_funder_in_text_summary(session_factory):
+    async with session_factory() as session:
+        repo = WalletRepository(session)
+        await repo.add_wallet("Wallet111")
+        await repo.record_activity(
+            NormalizedActivity(
+                wallet="Wallet111", event_type=EventType.TRANSFER, mint="SOL", amount=Decimal(1),
+                counterparty="FunderWallet111", slot=1, block_time=None, signature="sig-funded",
+            )
+        )
+        await session.commit()
+
+    service = GraphCommandService(graph_service=GraphService(session_factory))
+    text, png_bytes = await service.graph("Wallet111")
+    assert "Funded by: FunderWallet111" in text
+    assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 async def test_dev_profile_summarizes_launch_history_and_signals(session_factory):

@@ -173,12 +173,45 @@ constraint as Phases 1-3): pattern thresholds are reasonable starting points,
 not tuned against real rug-pull data, and are meant to be adjusted with real
 observation, not treated as ground truth from day one.
 
-## Phase 5 — Graph — not started
+## Phase 5 — Graph — **done**
 
 Spec sections 64–69, 122, 144–145.
 
-- Wallet relationship graph (funded/transferred/created/bought/sold edges),
-  bubble map, wallet/token detail pages, cross-wallet correlation.
+- `graph/builder.py` (`build_wallet_graph`): turns already-persisted rows into
+  a typed `networkx.MultiDiGraph` — nothing new is tracked or inferred. SOL
+  transfers (`WalletActivity` where `mint == "SOL"`) become `FUNDED` edges,
+  SPL transfers become `TRANSFERRED` edges (direction from the sign of the
+  recorded amount, sender → receiver), `TokenTrade` rows become `BOUGHT`/
+  `SOLD` edges wallet → mint, and `Token.creator_address` becomes a `CREATED`
+  edge creator → mint. Scoped to a starting set of addresses, not "the whole
+  database" — a global graph isn't meaningful to render.
+- `graph/analysis.py`: `funders_of` / `funded_by` / `shares_a_funder_with` /
+  `funder_clusters` — cross-wallet correlation restricted to `FUNDED` edges.
+  This is the concrete form of the "DevCluster" idea Phase 4 flagged as
+  needing the graph: two token creators funded from the same wallet is a
+  real, observable signal they may be the same operator running multiple
+  accounts, without claiming that outright.
+- `graph/service.py` (`GraphService`): builds one address's direct graph,
+  then re-builds including its funders/funded addresses so `/wallet graph`
+  shows a chain of funding relationships, not just one node's own edges.
+  Bounded to one expansion pass, not open-ended recursion.
+- `graph/render.py`: a real PNG bubble map (matplotlib, headless `Agg`
+  backend — no display server needed), node size from real SOL-denominated
+  volume through that node, edges colored/legended by kind. No fabricated
+  "risk" visual encoding — size and color both come straight from the graph's
+  own edge data.
+- `/wallet graph <address>`: posts the bubble map plus a text summary
+  (funders, who this address funded, other addresses sharing a funder).
+- `networkx`/`matplotlib` moved from the `analysis` optional extra into core
+  dependencies, matching how SQLAlchemy/discord.py were promoted once
+  actually used (Phase 2) — `numpy`/`pandas` stay optional since nothing here
+  uses them directly.
+
+Not validated against live mainnet (same constraint as prior phases). Graph
+construction and rendering are both exercised with real persisted rows in
+tests; the bubble map's *layout* (networkx's spring layout) isn't visually
+reviewed by a human in this sandbox — only that it produces a structurally
+valid PNG.
 
 ## Phase 6 — Strategy — not started
 

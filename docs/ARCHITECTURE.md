@@ -144,7 +144,15 @@ see `ROADMAP.md`.
 - `discord_bot/bot.py` / `discord_bot/alert_sink.py` — the `app_commands`
   wiring and the concrete `AlertSink` that actually posts to a channel; the
   only two files that import `discord` outside of `bot_main.py` itself.
-- `bot_main.py` — the full composition root (Phases 1-3) that a real
+- `graph/builder.py`, `graph/analysis.py`, `graph/service.py`,
+  `graph/render.py` — the wallet relationship graph (spec section 64-69, 122,
+  144-145): `build_wallet_graph()` turns persisted rows into a typed
+  `networkx.MultiDiGraph` (no DB access itself — takes a `WalletRepository`
+  and a list of addresses); `analysis.py`'s functions are pure graph
+  operations (funder correlation, clustering); `GraphService` is the
+  DB-facing orchestrator that expands one address into its funding context;
+  `render.py` turns a graph into a PNG bubble map.
+- `bot_main.py` — the full composition root (Phases 1-5) that a real
   deployment runs.
 
 ## Why balance deltas, not per-program instruction parsing

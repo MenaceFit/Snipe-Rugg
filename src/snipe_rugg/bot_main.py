@@ -23,9 +23,11 @@ from snipe_rugg.discord_bot.alert_sink import DiscordAlertSink
 from snipe_rugg.discord_bot.bot import build_bot
 from snipe_rugg.discord_bot.services import (
     DevCommandService,
+    GraphCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
+from snipe_rugg.graph.service import GraphService
 from snipe_rugg.ingestion.gap_recovery import GapRecoveryService
 from snipe_rugg.ingestion.pipeline import TOPIC_NORMALIZED_EVENT, IngestionPipeline
 from snipe_rugg.launchpad.monitor import LaunchMonitor
@@ -73,6 +75,7 @@ async def run() -> None:
         wallet_service=WalletCommandService(session_factory=session_factory, provider=manager),
         watchlist_service=WatchlistCommandService(session_factory=session_factory),
         dev_service=DevCommandService(dev_monitor=dev_monitor),
+        graph_service=GraphCommandService(graph_service=GraphService(session_factory)),
     )
     alert_sink = DiscordAlertSink(bot, channel_id=settings.discord_alert_channel_id)
     wallet_tracker = WalletTracker(

@@ -15,7 +15,7 @@ Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─▶ Decoder
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for build order and current status.
 
-## Status: Phase 4 — Dev monitor
+## Status: Phase 5 — Graph
 
 Done so far: Phase 1 (WebSocket connectivity to Solana, reconnect/resubscribe,
 gap-recovery backfill, event normalization, dedup, latency telemetry), Phase 2
@@ -29,8 +29,12 @@ through to its graduation on PumpSwap, with "🚨 DEV LAUNCH DETECTED" and
 from real launch/trade history, four repeated-behavior pattern detectors, and
 "🚩 HIGH/MEDIUM-RISK PATTERN DETECTED" alerts that require corroborating
 signals before reaching HIGH — see `docs/ARCHITECTURE.md`'s "Rug-risk signal
-design"). Graph/strategy tracking and paper trading are later phases — see the
-roadmap — and aren't implemented yet.
+design"), and Phase 5 (wallet relationship graph — funded/transferred/
+created/bought/sold edges built from already-persisted rows, cross-wallet
+funder correlation, and `/wallet graph` posting a rendered PNG bubble map
+plus a text summary). Strategy tracking, paper trading, backtesting, and
+optional live execution are later phases — see the roadmap — and aren't
+implemented yet.
 
 ## Quickstart
 
@@ -101,6 +105,11 @@ src/snipe_rugg/
     patterns.py                   # assess_dev(): DevProfile -> DevRiskAssessment
     service.py                    # DevMonitorService: DB-backed refresh/persist
     alerts.py                     # refresh_and_maybe_alert(): shared escalation gate
+  graph/
+    builder.py                   # build_wallet_graph(): persisted rows -> networkx MultiDiGraph
+    analysis.py                   # funders_of / shares_a_funder_with / funder_clusters
+    service.py                    # GraphService: DB-backed one-hop funder expansion
+    render.py                     # render_bubble_map(): graph -> PNG bytes
   db/
     base.py                     # async engine/session
     models.py                    # tracked_wallets, wallet_groups, token_trades, tokens, dev_risk_signals, ...
@@ -116,7 +125,7 @@ src/snipe_rugg/
     bot.py                         # app_commands wiring
     alert_sink.py                  # the concrete AlertSink that posts to a channel
   main.py                         # Phase 1 demo entrypoint
-  bot_main.py                      # full Phase 1-4 composition root
+  bot_main.py                      # full Phase 1-5 composition root
 tests/                        # pytest + pytest-asyncio, incl. a real mock WS server
 docs/                          # architecture, roadmap, provider matrix
 ```
