@@ -4,6 +4,7 @@ SQLAlchemy session directly."""
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,8 @@ from snipe_rugg.core.clock import utc_now
 from snipe_rugg.db.models import (
     Alert,
     DevRiskSignal,
+    PaperPosition,
+    PaperPositionStatus,
     Token,
     TokenTrade,
     TrackedWallet,
@@ -298,3 +301,85 @@ class WalletRepository:
         if existing is not None:
             await self._session.delete(existing)
             await self._session.flush()
+
+    async def get_open_position(self, mint: str) -> PaperPosition | None:
+        result = await self._session.execute(
+            select(PaperPosition).where(PaperPosition.mint == mint, PaperPosition.status == PaperPositionStatus.OPEN.value)
+        )
+        return result.scalar_one_or_none()
+
+    async def count_open_positions(self) -> int:
+        result = await self._session.execute(
+            select(PaperPosition).where(PaperPosition.status == PaperPositionStatus.OPEN.value)
+        )
+        return len(result.scalars().all())
+
+    async def list_open_positions(self) -> list[PaperPosition]:
+        result = await self._session.execute(
+            select(PaperPosition)
+            .where(PaperPosition.status == PaperPositionStatus.OPEN.value)
+            .order_by(PaperPosition.created_at)
+        )
+        return list(result.scalars().all())
+
+    async def list_closed_positions(self) -> list[PaperPosition]:
+        result = await self._session.execute(
+            select(PaperPosition)
+            .where(PaperPosition.status == PaperPositionStatus.CLOSED.value)
+            .order_by(PaperPosition.created_at)
+        )
+        return list(result.scalars().all())
+
+    async def open_paper_position(
+        self,
+        *,
+        mint: str,
+        creator_address: str,
+        followed_wallet: str,
+        entry_signature: str,
+        entry_slot: int,
+        entry_block_time: datetime | None,
+        entry_sol_amount: Decimal,
+        entry_token_amount: Decimal,
+        entry_price_sol: Decimal,
+    ) -> PaperPosition:
+        row = PaperPosition(
+            mint=mint,
+            creator_address=creator_address,
+            followed_wallet=followed_wallet,
+            status=PaperPositionStatus.OPEN.value,
+            entry_signature=entry_signature,
+            entry_slot=entry_slot,
+            entry_block_time=entry_block_time,
+            entry_sol_amount=entry_sol_amount,
+            entry_token_amount=entry_token_amount,
+            entry_price_sol=entry_price_sol,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return row
+
+    async def close_paper_position(
+        self,
+        position_id: str,
+        *,
+        exit_signature: str,
+        exit_slot: int,
+        exit_block_time: datetime | None,
+        exit_price_sol: Decimal,
+        exit_reason: str,
+        realized_pnl_sol: Decimal,
+    ) -> PaperPosition | None:
+        result = await self._session.execute(select(PaperPosition).where(PaperPosition.id == position_id))
+        position = result.scalar_one_or_none()
+        if position is None:
+            return None
+        position.status = PaperPositionStatus.CLOSED.value
+        position.exit_signature = exit_signature
+        position.exit_slot = exit_slot
+        position.exit_block_time = exit_block_time
+        position.exit_price_sol = exit_price_sol
+        position.exit_reason = exit_reason
+        position.realized_pnl_sol = realized_pnl_sol
+        await self._session.flush()
+        return position

@@ -213,14 +213,52 @@ tests; the bubble map's *layout* (networkx's spring layout) isn't visually
 reviewed by a human in this sandbox — only that it produces a structurally
 valid PNG.
 
-## Phase 6 — Strategy — not started
+## Phase 6 — Strategy — **done**
 
 Spec sections 38–39, 54–55, 88, 119–121, 126–140.
 
-- `StrategyEngine`, decoupled from Discord.
-- Paper trading only (`MODE = PAPER` by default and, at this phase, the only
-  mode that exists at all).
-- Exit-rule engine (`CreatorExitRule`), signal filters, risk gates.
+- `core/topics.py` / `TOPIC_NEW_TRADE`: `WalletTracker` now also publishes
+  every persisted `NormalizedTrade` onto the shared `EventBus`, so the
+  strategy engine reacts to real trade activity without importing or
+  coupling to `tracking/*` internals — the same decoupling `EventBus`
+  already provided between ingestion and everything downstream of it.
+- `strategy/engine.py` (`StrategyEngine`): entries follow a tracked wallet's
+  own real BUY, priced from that exact transaction's own observed rate
+  (`amount_in / amount_out`) — never a fabricated fill. This deliberately
+  does **not** snipe a token the instant its launch is detected: an instant
+  entry would need either a continuous market-data feed (not integrated —
+  see `API_MATRIX.md`) or hand-decoding Pump.fun's bonding-curve account
+  layout without a verified spec, which `launchpad/detector.py` already
+  declines to do for the exact same reason (spec section 101). A tracked
+  wallet's own trade — including an auto-discovered dev's own buy of their
+  freshly-launched token — sidesteps that without inventing a number. This
+  is a deliberate, documented scope limit, not an oversight; a live
+  bonding-curve price read is a natural fast-follow once its account layout
+  is verified against current docs.
+- `CreatorExitRule`: closes a position the moment the token's own creator
+  address sells that same mint, priced from that SELL's own observed rate.
+  No other exit path exists yet.
+- `strategy/rules.py` (`should_enter`): risk gate skipping entries into
+  tokens whose creator's *combined* dev-risk assessment (Phase 4) is HIGH —
+  same "never a single-signal verdict" discipline as `dev/patterns.py`, since
+  it gates on the already-corroborated `overall_severity`, not a raw signal.
+  Plus a max-open-positions gate and a duplicate-position guard.
+- `paper_positions` table + `/strategy status|positions|pnl`: MODE=PAPER is
+  the only mode that exists through this phase — `StrategyConfig` has no
+  live/execution field at all, not even a disabled one; that's Phase 8.
+- **Bug found via these tests, fixed project-wide**: plain SQLAlchemy
+  `Numeric` on SQLite round-trips a `Decimal` through binary floating point
+  (`Decimal("0.1")` came back as `Decimal("0.100000000000000006")`) — a real
+  precision bug, not a test artifact, since `DEFAULT_SQLITE_URL` in
+  `bot_main.py` is a real fallback deployment target. Fixed with
+  `db/types.py`'s `ExactNumeric` (stores the exact decimal string on SQLite,
+  native `NUMERIC` — already exact — everywhere else) and applied to every
+  monetary/token-amount column in `db/models.py`, not just the new
+  `paper_positions` ones.
+
+Not validated against live mainnet (same constraint as prior phases). No
+backtest exists yet to validate these thresholds/PnL logic against
+historical data — that's Phase 7.
 
 ## Phase 7 — Backtest — not started
 

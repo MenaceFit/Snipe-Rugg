@@ -13,11 +13,12 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from snipe_rugg.core.clock import utc_now
 from snipe_rugg.db.base import Base
+from snipe_rugg.db.types import ExactNumeric
 from snipe_rugg.launchpad.models import LaunchpadStatus
 
 
@@ -53,7 +54,7 @@ class TrackedWallet(Base):
     alert_sells: Mapped[bool] = mapped_column(Boolean, default=True)
     alert_transfers: Mapped[bool] = mapped_column(Boolean, default=False)
     alert_launches: Mapped[bool] = mapped_column(Boolean, default=True)
-    min_alert_sol: Mapped[Decimal | None] = mapped_column(Numeric(20, 9), nullable=True)
+    min_alert_sol: Mapped[Decimal | None] = mapped_column(ExactNumeric(20, 9), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -96,8 +97,8 @@ class TokenTrade(Base):
     side: Mapped[str] = mapped_column(String(16))
     token_in: Mapped[str | None] = mapped_column(String(64), nullable=True)
     token_out: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    amount_in: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
-    amount_out: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    amount_in: Mapped[Decimal | None] = mapped_column(ExactNumeric(38, 18), nullable=True)
+    amount_out: Mapped[Decimal | None] = mapped_column(ExactNumeric(38, 18), nullable=True)
     program: Mapped[str | None] = mapped_column(String(64), nullable=True)
     confidence: Mapped[str] = mapped_column(String(16))
     slot: Mapped[int] = mapped_column()
@@ -116,7 +117,7 @@ class WalletActivity(Base):
     signature: Mapped[str] = mapped_column(String(128), index=True)
     event_type: Mapped[str] = mapped_column(String(32))
     mint: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    amount: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(ExactNumeric(38, 18), nullable=True)
     counterparty: Mapped[str | None] = mapped_column(String(64), nullable=True)
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     slot: Mapped[int] = mapped_column()
@@ -174,3 +175,40 @@ class DevRiskSignal(Base):
     evidence: Mapped[dict] = mapped_column(JSON, default=dict)
     first_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PaperPositionStatus(str, enum.Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class PaperPosition(Base):
+    """A simulated position (spec section 38-39, 54-55, 88, 119-140). Entry
+    and exit prices are always the real observed price of an actual on-chain
+    trade (see strategy/engine.py) — never a fabricated quote. MODE=PAPER is
+    the only mode that exists through this phase; nothing writes to this
+    table from anywhere but the paper strategy engine."""
+
+    __tablename__ = "paper_positions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    mint: Mapped[str] = mapped_column(String(64), index=True)
+    creator_address: Mapped[str] = mapped_column(String(64), index=True)
+    followed_wallet: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default=PaperPositionStatus.OPEN.value, index=True)
+
+    entry_signature: Mapped[str] = mapped_column(String(128))
+    entry_slot: Mapped[int] = mapped_column()
+    entry_block_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    entry_sol_amount: Mapped[Decimal] = mapped_column(ExactNumeric(38, 18))
+    entry_token_amount: Mapped[Decimal] = mapped_column(ExactNumeric(38, 18))
+    entry_price_sol: Mapped[Decimal] = mapped_column(ExactNumeric(38, 18))
+
+    exit_signature: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    exit_slot: Mapped[int | None] = mapped_column(nullable=True)
+    exit_block_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    exit_price_sol: Mapped[Decimal | None] = mapped_column(ExactNumeric(38, 18), nullable=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    realized_pnl_sol: Mapped[Decimal | None] = mapped_column(ExactNumeric(38, 18), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

@@ -16,6 +16,7 @@ import logging
 from snipe_rugg.config import get_settings
 from snipe_rugg.core.dedup import InMemoryDeduplicator
 from snipe_rugg.core.event_bus import EventBus
+from snipe_rugg.core.topics import TOPIC_NEW_TRADE
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
 from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.dev.service import DevMonitorService
@@ -24,6 +25,7 @@ from snipe_rugg.discord_bot.bot import build_bot
 from snipe_rugg.discord_bot.services import (
     DevCommandService,
     GraphCommandService,
+    StrategyCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
@@ -37,6 +39,8 @@ from snipe_rugg.providers.helius_ws import HeliusWebSocketProvider
 from snipe_rugg.providers.manager import ProviderManager
 from snipe_rugg.providers.rpc_http import SolanaRpcHttpClient
 from snipe_rugg.providers.solana_ws import SolanaWebSocketProvider
+from snipe_rugg.strategy.engine import StrategyEngine
+from snipe_rugg.strategy.models import StrategyConfig
 from snipe_rugg.tracking.token_tracker import TokenTracker
 from snipe_rugg.tracking.wallet_tracker import (
     WalletTracker,
@@ -71,15 +75,22 @@ async def run() -> None:
     gap_recovery = GapRecoveryService(rpc, pipeline)
 
     dev_monitor = DevMonitorService(session_factory)
+    strategy_config = StrategyConfig()
     bot = build_bot(
         wallet_service=WalletCommandService(session_factory=session_factory, provider=manager),
         watchlist_service=WatchlistCommandService(session_factory=session_factory),
         dev_service=DevCommandService(dev_monitor=dev_monitor),
         graph_service=GraphCommandService(graph_service=GraphService(session_factory)),
+        strategy_service=StrategyCommandService(session_factory=session_factory, config=strategy_config),
     )
     alert_sink = DiscordAlertSink(bot, channel_id=settings.discord_alert_channel_id)
     wallet_tracker = WalletTracker(
-        rpc=rpc, provider=manager, session_factory=session_factory, alert_sink=alert_sink, dev_monitor=dev_monitor
+        rpc=rpc,
+        provider=manager,
+        session_factory=session_factory,
+        alert_sink=alert_sink,
+        dev_monitor=dev_monitor,
+        bus=bus,
     )
     token_tracker = TokenTracker(
         rpc=rpc, session_factory=session_factory, alert_sink=alert_sink, dev_monitor=dev_monitor
@@ -87,9 +98,11 @@ async def run() -> None:
     launch_monitor = LaunchMonitor(
         rpc=rpc, provider=manager, session_factory=session_factory, alert_sink=alert_sink, dev_monitor=dev_monitor
     )
+    strategy_engine = StrategyEngine(session_factory=session_factory, dev_monitor=dev_monitor, config=strategy_config)
     bus.subscribe(TOPIC_NORMALIZED_EVENT, wallet_tracker.handle_normalized_event)
     bus.subscribe(TOPIC_NORMALIZED_EVENT, token_tracker.handle_normalized_event)
     bus.subscribe(TOPIC_NORMALIZED_EVENT, launch_monitor.handle_normalized_event)
+    bus.subscribe(TOPIC_NEW_TRADE, strategy_engine.handle_trade)
 
     async def on_reconnect(_: StreamingProvider) -> None:
         async with session_factory() as session:

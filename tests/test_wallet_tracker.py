@@ -5,7 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.pool import StaticPool
 
 from snipe_rugg.core.clock import utc_now
+from snipe_rugg.core.event_bus import EventBus
 from snipe_rugg.core.events import LatencyTrace, NormalizedChainEvent, SubscriptionKind
+from snipe_rugg.core.topics import TOPIC_NEW_TRADE
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
 from snipe_rugg.db.models import TokenTrade, WalletStatus
 from snipe_rugg.db.repository import WalletRepository
@@ -87,13 +89,14 @@ async def session_factory():
     await engine.dispose()
 
 
-def _tracker(session_factory, *, rpc, sink=None, provider=None, dev_monitor=None):
+def _tracker(session_factory, *, rpc, sink=None, provider=None, dev_monitor=None, bus=None):
     return WalletTracker(
         rpc=rpc,
         provider=provider or FakeStreamingProvider(),
         session_factory=session_factory,
         alert_sink=sink or FakeAlertSink(),
         dev_monitor=dev_monitor or DevMonitorService(session_factory),
+        bus=bus or EventBus(),
     )
 
 
@@ -125,6 +128,32 @@ async def test_buy_is_persisted_and_alerted(session_factory):
     assert sent_wallet.address == wallet_address
     assert isinstance(sent_event, NormalizedTrade)
     assert sent_event.side is EventType.BUY
+
+
+async def test_buy_is_published_to_the_new_trade_topic_for_the_strategy_engine(session_factory):
+    wallet_address = "WalletBuyer1111111111111111111111111111111"
+    async with session_factory() as session:
+        await WalletRepository(session).add_wallet(wallet_address)
+        await session.commit()
+
+    raw_tx = load_fixture("tx_buy_pumpswap.json")
+    rpc = FakeRpc({raw_tx["transaction"]["signatures"][0]: raw_tx})
+    bus = EventBus()
+    published = []
+
+    async def record(trade):
+        published.append(trade)
+
+    bus.subscribe(TOPIC_NEW_TRADE, record)
+    tracker = _tracker(session_factory, rpc=rpc, bus=bus)
+
+    event = _chain_event(
+        signature=raw_tx["transaction"]["signatures"][0], subscription_key=wallet_subscription_key(wallet_address)
+    )
+    await tracker.handle_normalized_event(event)
+
+    assert len(published) == 1
+    assert published[0].side is EventType.BUY
 
     assert event.latency.decoded_at is not None
     assert event.latency.classified_at is not None

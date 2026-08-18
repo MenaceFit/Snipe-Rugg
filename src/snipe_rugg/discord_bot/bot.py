@@ -14,6 +14,7 @@ from discord.ext import commands
 from snipe_rugg.discord_bot.services import (
     DevCommandService,
     GraphCommandService,
+    StrategyCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
@@ -93,6 +94,24 @@ class DevGroup(app_commands.Group):
         await interaction.response.send_message(await self._service.profile(address))
 
 
+class StrategyGroup(app_commands.Group):
+    def __init__(self, service: StrategyCommandService) -> None:
+        super().__init__(name="strategy", description="Paper strategy engine status and positions")
+        self._service = service
+
+    @app_commands.command(name="status", description="Show the paper strategy engine's configuration")
+    async def status(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(await self._service.status())
+
+    @app_commands.command(name="positions", description="List open paper positions")
+    async def positions(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(await self._service.positions())
+
+    @app_commands.command(name="pnl", description="Show realized paper-trading PnL")
+    async def pnl(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(await self._service.pnl())
+
+
 class SnipeRuggBot(commands.Bot):
     def __init__(
         self,
@@ -101,6 +120,7 @@ class SnipeRuggBot(commands.Bot):
         watchlist_service: WatchlistCommandService,
         dev_service: DevCommandService,
         graph_service: GraphCommandService,
+        strategy_service: StrategyCommandService,
         intents: discord.Intents | None = None,
     ) -> None:
         super().__init__(command_prefix="!", intents=intents or discord.Intents.default())
@@ -108,11 +128,13 @@ class SnipeRuggBot(commands.Bot):
         self._watchlist_service = watchlist_service
         self._dev_service = dev_service
         self._graph_service = graph_service
+        self._strategy_service = strategy_service
 
     async def setup_hook(self) -> None:
         self.tree.add_command(WalletGroup(self._wallet_service, self._graph_service))
         self.tree.add_command(WatchlistGroup(self._watchlist_service))
         self.tree.add_command(DevGroup(self._dev_service))
+        self.tree.add_command(StrategyGroup(self._strategy_service))
         await self.tree.sync()
 
 
@@ -122,6 +144,7 @@ def build_bot(
     watchlist_service: WatchlistCommandService,
     dev_service: DevCommandService,
     graph_service: GraphCommandService,
+    strategy_service: StrategyCommandService,
     intents: discord.Intents | None = None,
 ) -> SnipeRuggBot:
     return SnipeRuggBot(
@@ -129,5 +152,6 @@ def build_bot(
         watchlist_service=watchlist_service,
         dev_service=dev_service,
         graph_service=graph_service,
+        strategy_service=strategy_service,
         intents=intents,
     )

@@ -10,6 +10,8 @@ resubscribes.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from snipe_rugg.db.models import WalletStatus
@@ -26,6 +28,7 @@ from snipe_rugg.graph.analysis import funded_by, funders_of, shares_a_funder_wit
 from snipe_rugg.graph.render import render_bubble_map
 from snipe_rugg.graph.service import GraphService
 from snipe_rugg.providers.base import StreamingProvider
+from snipe_rugg.strategy.models import StrategyConfig
 from snipe_rugg.tracking.wallet_tracker import wallet_subscription_key
 
 
@@ -200,3 +203,45 @@ class GraphCommandService:
 
         png_bytes = render_bubble_map(graph, focus=address)
         return "\n".join(lines), png_bytes
+
+
+class StrategyCommandService:
+    """spec section 38-39, 119-121: read-only visibility into the paper
+    strategy engine's own ledger — this service never opens or closes a
+    position itself, strategy/engine.py does that from the trade stream."""
+
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession], config: StrategyConfig) -> None:
+        self._session_factory = session_factory
+        self._config = config
+
+    async def status(self) -> str:
+        return (
+            f"Paper trading: {'ENABLED' if self._config.enabled else 'DISABLED'}\n"
+            f"Position size: {self._config.position_size_sol} SOL\n"
+            f"Max open positions: {self._config.max_open_positions}\n"
+            f"Skip high-risk creators: {self._config.skip_high_risk_creators}"
+        )
+
+    async def positions(self) -> str:
+        async with self._session_factory() as session:
+            open_positions = await WalletRepository(session).list_open_positions()
+        if not open_positions:
+            return "No open paper positions."
+        lines = [f"{len(open_positions)} open position(s):"]
+        lines.extend(
+            f"`{p.mint}` — {p.entry_sol_amount} SOL @ {p.entry_price_sol} SOL/token (following `{p.followed_wallet}`)"
+            for p in open_positions
+        )
+        return "\n".join(lines)
+
+    async def pnl(self) -> str:
+        async with self._session_factory() as session:
+            closed = await WalletRepository(session).list_closed_positions()
+        if not closed:
+            return "No closed paper positions yet."
+        total_pnl = sum((p.realized_pnl_sol or Decimal(0) for p in closed), Decimal(0))
+        wins = sum(1 for p in closed if (p.realized_pnl_sol or Decimal(0)) > 0)
+        return (
+            f"{len(closed)} closed position(s) — {wins} win(s), {len(closed) - wins} loss(es)\n"
+            f"Total realized PnL: {total_pnl} SOL"
+        )

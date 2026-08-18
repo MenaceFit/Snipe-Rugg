@@ -144,6 +144,18 @@ see `ROADMAP.md`.
 - `discord_bot/bot.py` / `discord_bot/alert_sink.py` — the `app_commands`
   wiring and the concrete `AlertSink` that actually posts to a channel; the
   only two files that import `discord` outside of `bot_main.py` itself.
+- `core/topics.py` — `EventBus` topic names published by `tracking/*` for
+  independent consumers (currently just the strategy engine) to subscribe to.
+- `db/types.py` (`ExactNumeric`) — every monetary/token-amount column uses
+  this instead of plain `sqlalchemy.Numeric`; see "Numeric precision on
+  SQLite" below for why.
+- `strategy/rules.py`, `strategy/engine.py` — the paper strategy engine (spec
+  section 38-39, 54-55, 88, 119-121, 126-140): `StrategyEngine` subscribes to
+  `TOPIC_NEW_TRADE` only, decoupled from `tracking/*` and from Discord the
+  same way `WalletTracker` is. Entries follow a tracked wallet's own BUY
+  (priced from that trade's own observed rate); `CreatorExitRule` closes on
+  the token's own creator selling that mint. See "Why entries don't snipe at
+  launch" below.
 - `graph/builder.py`, `graph/analysis.py`, `graph/service.py`,
   `graph/render.py` — the wallet relationship graph (spec section 64-69, 122,
   144-145): `build_wallet_graph()` turns persisted rows into a typed
@@ -206,6 +218,39 @@ PATTERN" Discord alert — it takes corroboration. Labels are deliberately
 "HIGH-RISK REPEATED PATTERN" / "REPEATED PATTERN — WATCH", never "rugger",
 "scam", or "fraud" — this project observes and reports patterns, it doesn't
 adjudicate intent.
+
+## Why entries don't snipe at launch (spec section 101 applied to strategy)
+
+`StrategyEngine` (Phase 6) enters a paper position on a tracked wallet's own
+BUY, not on `launchpad/detector.py`'s launch-detection event itself, even
+though "snipe a fresh launch" is closer to this project's namesake. The
+reason is the same discipline `launchpad/detector.py` already applies: a
+launch transaction only *creates* a token, it doesn't establish a price by
+itself outside of Pump.fun's bonding-curve formula — pricing an instant entry
+would mean either integrating a continuous market-data feed (not done — see
+`API_MATRIX.md`) or hand-decoding the bonding-curve account layout without a
+verified spec, exactly the kind of unverified-byte-offset risk spec section
+101 exists to prevent. A tracked wallet's own BUY is a real, already-decoded,
+already-priced transaction — using its own `amount_in`/`amount_out` ratio as
+the entry price costs nothing invented. This is a documented scope limit, not
+a silent gap: a live bonding-curve read is a natural next step once its
+layout is verified against Pump.fun's current docs at implementation time.
+
+## Numeric precision on SQLite (`db/types.py`)
+
+Plain `sqlalchemy.Numeric` does not round-trip a `Decimal` exactly through
+SQLite: SQLite has no fixed-point decimal storage class, so a bound Decimal
+ends up stored and read back via binary floating point —
+`Decimal("0.1")` came back as `Decimal("0.100000000000000006")` in testing.
+This surfaced via Phase 6's strategy-engine tests, the first place in this
+codebase computing a new Decimal (paper P&L) from values already read back
+from the database, rather than just round-tripping a literal — earlier
+phases' tests happened to use values whose float round-trip error didn't
+show up in a `repr()`. `ExactNumeric` (`db/types.py`) stores the exact
+decimal string on SQLite and the database's own native `NUMERIC` — already
+exact — everywhere else (postgres, this project's actual production target
+per `.env.example`). Every monetary/token-amount column in `db/models.py`
+uses it; use it for any new one too.
 
 ## Concurrency notes (read before touching `solana_ws.py`)
 

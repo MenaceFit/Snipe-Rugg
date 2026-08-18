@@ -23,7 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from snipe_rugg.alerts.sink import AlertSink, BusinessEvent
 from snipe_rugg.core.clock import utc_now
+from snipe_rugg.core.event_bus import EventBus
 from snipe_rugg.core.events import NormalizedChainEvent, SubscriptionKind
+from snipe_rugg.core.topics import TOPIC_NEW_TRADE
 from snipe_rugg.db.models import TrackedWallet, WalletSource, WalletStatus
 from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.decoder.classifier import classify
@@ -83,12 +85,14 @@ class WalletTracker:
         session_factory: async_sessionmaker[AsyncSession],
         alert_sink: AlertSink,
         dev_monitor: DevMonitorService,
+        bus: EventBus,
     ) -> None:
         self._rpc = rpc
         self._provider = provider
         self._session_factory = session_factory
         self._alert_sink = alert_sink
         self._dev_monitor = dev_monitor
+        self._bus = bus
         self._decoder = TransactionDecoder()
 
     async def handle_normalized_event(self, event: NormalizedChainEvent) -> None:
@@ -132,6 +136,8 @@ class WalletTracker:
         for business_event in business_events:
             if self._should_alert(wallet, business_event):
                 await self._dispatch_alert(wallet, business_event, event)
+            if isinstance(business_event, NormalizedTrade):
+                await self._bus.publish(TOPIC_NEW_TRADE, business_event)
 
         if launch is not None:
             await self._provider.subscribe_logs(mentions=[launch.mint], key=token_subscription_key(launch.mint))

@@ -15,7 +15,7 @@ Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─▶ Decoder
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for build order and current status.
 
-## Status: Phase 5 — Graph
+## Status: Phase 6 — Strategy
 
 Done so far: Phase 1 (WebSocket connectivity to Solana, reconnect/resubscribe,
 gap-recovery backfill, event normalization, dedup, latency telemetry), Phase 2
@@ -29,12 +29,16 @@ through to its graduation on PumpSwap, with "🚨 DEV LAUNCH DETECTED" and
 from real launch/trade history, four repeated-behavior pattern detectors, and
 "🚩 HIGH/MEDIUM-RISK PATTERN DETECTED" alerts that require corroborating
 signals before reaching HIGH — see `docs/ARCHITECTURE.md`'s "Rug-risk signal
-design"), and Phase 5 (wallet relationship graph — funded/transferred/
+design"), Phase 5 (wallet relationship graph — funded/transferred/
 created/bought/sold edges built from already-persisted rows, cross-wallet
 funder correlation, and `/wallet graph` posting a rendered PNG bubble map
-plus a text summary). Strategy tracking, paper trading, backtesting, and
-optional live execution are later phases — see the roadmap — and aren't
-implemented yet.
+plus a text summary), and Phase 6 (a paper strategy engine that follows a
+tracked wallet's own real buys, exits on `CreatorExitRule` — the token's own
+creator selling — and reports through `/strategy status|positions|pnl`; see
+`docs/ARCHITECTURE.md`'s "Why entries don't snipe at launch" for why entries
+follow a real trade rather than firing the instant a launch is detected).
+Backtesting and optional live execution are later phases — see the roadmap —
+and aren't implemented yet.
 
 ## Quickstart
 
@@ -83,6 +87,7 @@ src/snipe_rugg/
     events.py           # RawStreamMessage, NormalizedChainEvent, LatencyTrace
     normalize.py        # provider-specific payload -> NormalizedChainEvent
     event_bus.py         # async pub/sub
+    topics.py             # EventBus topic names shared across modules
     dedup.py             # signature-based dedup (in-memory + Redis)
   providers/
     base.py              # BlockchainProvider / StreamingProvider / TransactionProvider
@@ -110,9 +115,13 @@ src/snipe_rugg/
     analysis.py                   # funders_of / shares_a_funder_with / funder_clusters
     service.py                    # GraphService: DB-backed one-hop funder expansion
     render.py                     # render_bubble_map(): graph -> PNG bytes
+  strategy/
+    rules.py                     # should_enter(): dev-risk gate over a DevRiskAssessment
+    engine.py                     # StrategyEngine: TOPIC_NEW_TRADE -> paper entries/exits
   db/
     base.py                     # async engine/session
-    models.py                    # tracked_wallets, wallet_groups, token_trades, tokens, dev_risk_signals, ...
+    types.py                     # ExactNumeric: exact Decimal storage on SQLite too
+    models.py                    # tracked_wallets, wallet_groups, token_trades, tokens, paper_positions, ...
     repository.py                 # the only thing that touches a session directly
   tracking/
     wallet_tracker.py             # event -> decode -> classify -> persist -> alert -> launch detect
@@ -125,7 +134,7 @@ src/snipe_rugg/
     bot.py                         # app_commands wiring
     alert_sink.py                  # the concrete AlertSink that posts to a channel
   main.py                         # Phase 1 demo entrypoint
-  bot_main.py                      # full Phase 1-5 composition root
+  bot_main.py                      # full Phase 1-6 composition root
 tests/                        # pytest + pytest-asyncio, incl. a real mock WS server
 docs/                          # architecture, roadmap, provider matrix
 ```
