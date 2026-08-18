@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "method": "programNotification",
+  "params": {
+    "subscription": 24040,
+    "result": {
+      "context": { "slot": 207547760 },
+      "value": {
+        "pubkey": "H4vnBqifaSACnKa7acsxstsY1iV1bvJNxsCY7enrd1hh",
+        "account": {
+          "lamports": 15298080,
+          "data": ["", "base64"],
+          "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "executable": false,
+          "rentEpoch": 636,
+          "space": 165
+        }
+      }
+    }
+  }
+}
