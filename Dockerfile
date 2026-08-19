@@ -11,4 +11,7 @@ COPY src ./src
 
 RUN pip install --upgrade pip && pip install .
 
-CMD ["python", "-m", "snipe_rugg.main"]
+# bot_main is the real deployment (all 8 phases wired together; requires
+# DISCORD_TOKEN and DISCORD_ALERT_CHANNEL_ID - see .env.example). main.py's
+# Phase-1-only demo is for local `--wallet <address>` runs, not this image.
+CMD ["python", "-m", "snipe_rugg.bot_main"]

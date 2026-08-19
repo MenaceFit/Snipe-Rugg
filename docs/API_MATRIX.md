@@ -17,14 +17,23 @@ as a starting point for that check, not a substitute for it.
 | Metaplex Token Metadata (on-chain program, not an API) | Token name/symbol/uri, read directly from the mint's metadata PDA | RPC-dependent, not a separate service | Same as whichever RPC is already in use — no separate cost | No (point lookup via `getAccountInfo`) | N/A | Not implemented — the clear next step for token name/ticker over a paid market-data API, but its account layout wasn't verified carefully enough during Phase 3 to risk hand-decoding it; do that verification before implementing |
 | Pump.fun (API) | Launch/graduation/bonding-curve data specific to Pump.fun | Not applicable | *Unverified — check current API terms before use* | Unverified | N/A | **Deliberately not used.** Launch detection (`launchpad/detector.py`) and graduation detection (`tracking/token_tracker.py`) were both built entirely from on-chain program IDs and the RPC's own instruction parsing — no Pump.fun API dependency at all, consistent with spec section 148 |
 
-## Why native Solana WS + Helius, and nothing else, through Phase 3
+## Why native Solana WS + Helius, and nothing else, through all 8 phases
 
 The spec's own priority order (section 3: latency first; section 148: prefer
 native chain data over market-data aggregators for "what did a wallet actually
 do") points at exactly these two for the real-time core, and it held up
-through token/launch detection too: Phase 3 needed zero market-data or
-launchpad API integration, only program IDs and the RPC's own parsing.
-Everything else in this table is either historical/indexed data (useful for
-backfill and cross-checking, not for the hot path) or market-data (useful for
-pricing, not for determining on-chain truth) — both are later-phase concerns
-and are left unimplemented here rather than stubbed out speculatively.
+through every later phase, not just token/launch detection: the dev monitor
+(Phase 4), graph (Phase 5), strategy engine and backtest (Phases 6-7) all
+price and reason about activity using only real on-chain trade rates already
+being decoded for the hot path — none of them needed a market-data API
+either. That's a real, load-bearing consequence, not a coincidence: it's
+exactly why `strategy/engine.py` doesn't snipe a token the instant its launch
+is detected (see `ARCHITECTURE.md`'s "Why entries don't snipe at launch") —
+an instant entry would have been the first place in the whole project that
+actually needed a price from somewhere other than a real trade. Everything
+else in this table is either historical/indexed data (useful for backfill
+and cross-checking, not for the hot path) or market-data (useful for USD
+pricing, not for determining on-chain truth) — both remain unimplemented
+here rather than stubbed out speculatively; USD-denominated alerts and a
+live bonding-curve price read are the two concrete places a market-data
+provider would plug in next, and both are documented gaps, not silent ones.

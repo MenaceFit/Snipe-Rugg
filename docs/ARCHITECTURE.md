@@ -25,30 +25,45 @@
    bandwidth for zero-detection-time failover, which matters more here than
    efficiency (see spec priorities: latency first).
 5. **Paper trading and observation by default, live execution last and opt-in.**
-   No execution path exists yet. When one is added (last, after the detection
-   engine and paper trading are validated), it ships disabled by default, and
-   private keys are never accepted through Discord, `.env`, the database, or
-   logs — full stop, not a configuration option.
+   `execution/live.py`'s `LiveExecutionProvider` was built last (Phase 8), after
+   the detection engine and paper trading were validated, and ships disabled
+   by default — `bot_main.py` never even constructs it. Private keys are never
+   accepted through Discord, `.env`, the database, or logs — full stop, not a
+   configuration option; see "Safety posture" below.
 
-## Pipeline (target shape)
+## Pipeline (as built — all 8 phases)
 
 ```
 Solana RPC WebSocket ┐
-Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─┬─▶ Transaction Decoder
-                                                          ├─▶ Wallet State Engine
-                                                          ├─▶ Token Discovery Engine
-                                                          ├─▶ Dev Monitor
-                                                          ├─▶ Strategy Engine
-                                                          ├─▶ Alert Engine ─▶ Discord
-                                                          └─▶ Database
+Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─┬─▶ Transaction Decoder ─▶ Database
+                                                          │        │
+                                                          │        ├─▶ Wallet Tracker ──▶ Alert Engine ─▶ Discord
+                                                          │        ├─▶ Token Tracker (graduation)
+                                                          │        └─▶ Launch Monitor (network-wide firehose)
+                                                          │                 │
+                                                          │                 ▼
+                                                          │           Dev Monitor ──▶ Alert Engine ─▶ Discord
+                                                          │
+                                                          └─▶ (TOPIC_NEW_TRADE) ─▶ Strategy Engine ─▶ Execution Provider
+                                                                                         ▲                  │
+                                                                                    Backtest Replay    Paper / Manual / Live
 ```
 
-**Phase 1** built the left-hand side of this diagram: both WebSocket sources,
-the ingestion layer, and the event queue, ending at a provider-agnostic
-`NormalizedChainEvent` published on an in-process event bus. **Phase 2** added
-the Transaction Decoder, Alert Engine, and Database boxes — scoped to wallet
-tracking, not the token/dev/strategy engines, which are still later phases —
-see `ROADMAP.md`.
+**Phase 1** built the left-hand side: both WebSocket sources, the ingestion
+layer, and the event queue, ending at a provider-agnostic
+`NormalizedChainEvent` published on an in-process event bus. **Phase 2**
+added the Transaction Decoder, Wallet Tracker, Alert Engine, and Database.
+**Phase 3** added the Token Tracker (graduation). **Phase 4** added the
+Launch Monitor (network-wide, not just tracked-wallet launches) and the Dev
+Monitor. **Phase 5** added the wallet relationship graph, reading from the
+same Database rather than sitting on the hot path. **Phase 6** added the
+Strategy Engine, subscribed to `TOPIC_NEW_TRADE` rather than the raw event
+queue — a second, business-level event bus topic downstream of the first.
+**Phase 7** added the Backtest Replay engine, which runs the same Strategy
+Engine against an isolated copy of the Database instead of the live stream.
+**Phase 8** added the Execution Provider seam between the Strategy Engine
+and anything that actually opens/closes a position — Paper by default,
+Manual and Live built but not wired into `bot_main.py`.
 
 ## Module map (implemented)
 
@@ -68,10 +83,14 @@ see `ROADMAP.md`.
   process; `RedisDeduplicator` (Redis `SET NX EX`) for multi-process/multi-pod
   deployments.
 - `providers/base.py` — `BlockchainProvider` (lifecycle), `StreamingProvider`
-  (subscriptions), `TransactionProvider` (point lookups for backfill). Only
-  these three: `MarketDataProvider`, `TokenProvider`, `ExecutionProvider` are
-  real interfaces for later phases and will be added with their first
-  implementation, not as empty shells now.
+  (subscriptions), `TransactionProvider` (point lookups for backfill). This
+  was deliberately left at just these three in Phase 1 rather than adding
+  `MarketDataProvider`/`TokenProvider`/`ExecutionProvider` as empty shells
+  ahead of any implementation — and it held: no market-data or token-metadata
+  provider was ever needed (see `API_MATRIX.md`), and the execution
+  abstraction that Phase 8 did add lives in its own `execution/` package
+  (`execution/base.py`'s `ExecutionProvider`), not here — it isn't a
+  `BlockchainProvider` in this hierarchy's sense at all.
 - `providers/solana_ws.py` — the subscription engine: connect, subscribe,
   reconnect with exponential backoff, resubscribe. See "Concurrency notes"
   below for two correctness details worth knowing before extending this file.

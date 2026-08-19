@@ -68,8 +68,9 @@ cp .env.example .env   # fill in SOLANA_RPC_WS / HELIUS_API_KEY / DISCORD_TOKEN 
 # measured latency) to stdout as structured JSON. No Discord/DB needed.
 .venv/bin/python -m snipe_rugg.main --wallet <SOME_WALLET_ADDRESS>
 
-# The real bot: Phase 1 streaming + Phase 2 tracking/decoding/alerting, live on
-# Discord. Needs DISCORD_TOKEN and DISCORD_ALERT_CHANNEL_ID in .env.
+# The real bot: all 8 phases (streaming, tracking, dev monitor, graph,
+# strategy, backtest, execution) wired together, live on Discord. Needs
+# DISCORD_TOKEN and DISCORD_ALERT_CHANNEL_ID in .env.
 .venv/bin/python -m snipe_rugg.bot_main
 
 # Tests (no network required — WebSocket behavior is tested against a local
@@ -79,7 +80,10 @@ cp .env.example .env   # fill in SOLANA_RPC_WS / HELIUS_API_KEY / DISCORD_TOKEN 
 .venv/bin/pytest
 ```
 
-Or via Docker Compose (also brings up Postgres and Redis for later phases):
+Or via Docker Compose (also brings up Postgres; a Redis container is included
+for `core/dedup.py`'s `RedisDeduplicator`, a multi-process alternative to the
+in-memory one `bot_main.py` actually uses today — not yet wired in, since
+this deployment is still single-process):
 
 ```bash
 docker compose up --build
@@ -162,7 +166,7 @@ src/snipe_rugg/
     sink.py                       # the AlertSink Protocol (business logic <-> discord.py seam)
     embeds.py                     # Discord embed builders (trade/activity/launch/graduation/dev-risk)
   discord_bot/
-    services.py                   # /wallet, /watchlist, /dev command logic (no discord.py)
+    services.py                   # /wallet, /watchlist, /dev, /wallet graph, /strategy, /backtest logic (no discord.py)
     bot.py                         # app_commands wiring
     alert_sink.py                  # the concrete AlertSink that posts to a channel
   main.py                         # Phase 1 demo entrypoint
