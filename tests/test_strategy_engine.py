@@ -33,8 +33,11 @@ async def session_factory():
     await engine.dispose()
 
 
-def _engine(session_factory, *, config=None):
-    return StrategyEngine(session_factory=session_factory, dev_monitor=DevMonitorService(session_factory), config=config)
+def _engine(session_factory, *, config=None, execution=None):
+    return StrategyEngine(
+        session_factory=session_factory, dev_monitor=DevMonitorService(session_factory), config=config,
+        execution=execution,
+    )
 
 
 def _buy(*, mint=MINT, wallet=FOLLOWED_WALLET, sol_in="1.0", tokens_out="1000", signature="sig-buy", slot=1) -> NormalizedTrade:
@@ -174,5 +177,50 @@ async def test_sell_by_a_non_creator_wallet_does_not_close_the_position(session_
 async def test_sell_with_no_matching_open_position_is_a_noop(session_factory):
     engine = _engine(session_factory)
     await engine.handle_trade(_sell())  # nothing open at all
+
+
+class _RejectingExecutionProvider:
+    """A fake ExecutionProvider that rejects everything - proves
+    StrategyEngine actually delegates through the injected provider (Phase
+    8) rather than writing paper_positions directly, since if it didn't,
+    this fake would have no effect."""
+
+    def __init__(self):
+        self.open_calls = []
+        self.close_calls = []
+
+    async def open_position(self, **kwargs):
+        self.open_calls.append(kwargs)
+
+    async def close_position(self, position, **kwargs):
+        self.close_calls.append((position, kwargs))
+
+
+async def test_a_rejecting_execution_provider_prevents_a_position_from_opening(session_factory):
+    await _seed_token(session_factory)
+    execution = _RejectingExecutionProvider()
+    engine = _engine(session_factory, execution=execution)
+
+    await engine.handle_trade(_buy())
+
+    assert len(execution.open_calls) == 1
+    async with session_factory() as session:
+        assert await WalletRepository(session).list_open_positions() == []
+
+
+async def test_a_rejecting_execution_provider_prevents_a_position_from_closing(session_factory):
+    await _seed_token(session_factory)
+    # First entry goes through a real (default) provider so there's
+    # something open to attempt to close.
+    entering_engine = _engine(session_factory)
+    await entering_engine.handle_trade(_buy())
+
+    execution = _RejectingExecutionProvider()
+    exiting_engine = _engine(session_factory, execution=execution)
+    await exiting_engine.handle_trade(_sell(wallet=CREATOR))
+
+    assert len(execution.close_calls) == 1
+    async with session_factory() as session:
+        assert len(await WalletRepository(session).list_open_positions()) == 1  # still open
     async with session_factory() as session:
         assert await WalletRepository(session).list_closed_positions() == []

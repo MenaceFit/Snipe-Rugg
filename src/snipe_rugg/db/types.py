@@ -19,10 +19,11 @@ sqlalchemy.Numeric for every monetary/token-amount column.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Numeric, String
+from sqlalchemy import DateTime, Numeric, String
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
@@ -53,4 +54,43 @@ class ExactNumeric(TypeDecorator):
             return None
         if dialect.name == "sqlite":
             return Decimal(value)
+        return value
+
+
+class UTCDateTime(TypeDecorator):
+    """Found via Phase 8's live-execution-limit tests, the first code in this
+    project to compare a datetime read back from the database against a
+    freshly computed `core.clock.utc_now()` value directly (earlier phases
+    only ever subtracted two DB-read datetimes from each other, which works
+    fine even if both silently lost their tzinfo the same way).
+
+    SQLite has no native timezone-aware timestamp storage: a bound
+    tz-aware `datetime` round-trips as a naive one — `datetime.now(UTC)` (
+    `tzinfo=UTC`) comes back with `tzinfo=None` — so any later `>=`/`<=`
+    comparison against a fresh tz-aware value raises `TypeError: can't
+    compare offset-naive and offset-aware datetimes`. Every datetime this
+    project produces is UTC (`core/clock.py`'s `utc_now()` is the only
+    clock function in the codebase), so on SQLite this reattaches
+    `tzinfo=UTC` on the way out rather than leaving it naive. Postgres (this
+    project's actual production target) already preserves timezone-aware
+    timestamps correctly, so nothing changes there. Use this instead of
+    sqlalchemy.DateTime(timezone=True) for every timestamp column.
+    """
+
+    impl = DateTime
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect: Dialect) -> Any:
+        if dialect.name == "sqlite":
+            return dialect.type_descriptor(DateTime(timezone=False))
+        return dialect.type_descriptor(DateTime(timezone=True))
+
+    def process_bind_param(self, value: datetime | None, dialect: Dialect) -> Any:
+        return value
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> datetime | None:
+        if value is None:
+            return None
+        if dialect.name == "sqlite" and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
         return value

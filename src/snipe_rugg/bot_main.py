@@ -1,8 +1,13 @@
-"""Full bot entrypoint: Phase 1's real-time core wired into Phase 2's wallet
-tracking, Phase 3's launch/graduation tracking, and Discord alerting. This is
-what actually satisfies spec section 152's success criteria end-to-end (add a
-wallet, see its activity, get an alert) — main.py stays the Phase-1-only demo
-it always was.
+"""Full bot entrypoint: the composition root for all 8 phases (real-time
+ingestion, wallet tracking, launch/graduation tracking, dev-risk monitoring,
+the relationship graph, paper strategy engine, backtesting, and the execution
+adapter). This is what actually satisfies spec section 152's success
+criteria end-to-end (add a wallet, see its activity, get an alert) —
+main.py stays the Phase-1-only demo it always was.
+
+Only ever constructs execution/paper.py's PaperExecutionProvider — see
+docs/ARCHITECTURE.md's "Safety posture" for why live execution isn't
+reachable by running this module as it exists in this repository.
 
 Requires DISCORD_TOKEN and DISCORD_ALERT_CHANNEL_ID; see .env.example.
 

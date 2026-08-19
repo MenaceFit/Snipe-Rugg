@@ -15,34 +15,47 @@ Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─▶ Decoder
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for build order and current status.
 
-## Status: Phase 7 — Backtest
+## Status: all 8 phases complete
 
-Done so far: Phase 1 (WebSocket connectivity to Solana, reconnect/resubscribe,
-gap-recovery backfill, event normalization, dedup, latency telemetry), Phase 2
-(transaction decoding, buy/sell/transfer/mint/burn/... classification, a
-SQLAlchemy-backed wallet/watchlist store, and a Discord bot with `/wallet` and
-`/watchlist` slash commands that alert on tracked-wallet activity), Phase 3
-(Pump.fun / generic launch detection, auto-tracking a newly launched token
-through to its graduation on PumpSwap, with "🚨 DEV LAUNCH DETECTED" and
-"🎓 GRADUATED" alerts), and Phase 4 (network-wide Pump.fun launch discovery via
-`LaunchMonitor`, auto-tracking unknown creators, dev/creator profiles built
-from real launch/trade history, four repeated-behavior pattern detectors, and
-"🚩 HIGH/MEDIUM-RISK PATTERN DETECTED" alerts that require corroborating
-signals before reaching HIGH — see `docs/ARCHITECTURE.md`'s "Rug-risk signal
-design"), Phase 5 (wallet relationship graph — funded/transferred/
-created/bought/sold edges built from already-persisted rows, cross-wallet
-funder correlation, and `/wallet graph` posting a rendered PNG bubble map
-plus a text summary), and Phase 6 (a paper strategy engine that follows a
-tracked wallet's own real buys, exits on `CreatorExitRule` — the token's own
-creator selling — and reports through `/strategy status|positions|pnl`; see
-`docs/ARCHITECTURE.md`'s "Why entries don't snipe at launch" for why entries
-follow a real trade rather than firing the instant a launch is detected), and
-Phase 7 (a backtest engine that replays this deployment's own recorded
-history through the exact live strategy engine in an isolated scratch
-database, with look-ahead structurally impossible rather than just avoided —
-see `docs/ARCHITECTURE.md`'s "No look-ahead" — plus win rate/PnL/drawdown
-metrics and `/backtest run`). Optional live execution is the last phase — see
-the roadmap — and isn't implemented yet.
+- **Phase 1** — WebSocket connectivity to Solana (native + optional Helius),
+  reconnect/resubscribe, gap-recovery backfill, event normalization, dedup,
+  per-stage latency telemetry.
+- **Phase 2** — transaction decoding via balance deltas,
+  buy/sell/transfer/mint/burn/... classification, a SQLAlchemy-backed
+  wallet/watchlist store, and a Discord bot (`/wallet`, `/watchlist`) that
+  alerts on tracked-wallet activity with real measured latency.
+- **Phase 3** — Pump.fun / generic launch detection, auto-tracking a newly
+  launched token through to its graduation on PumpSwap ("🚨 DEV LAUNCH
+  DETECTED" / "🎓 GRADUATED").
+- **Phase 4** — network-wide Pump.fun launch discovery (`LaunchMonitor`),
+  auto-tracking unknown creators, dev/creator profiles built from real
+  launch/trade history, four repeated-behavior pattern detectors, and
+  "🚩 HIGH/MEDIUM-RISK PATTERN DETECTED" alerts that require corroborating
+  signals before reaching HIGH (`docs/ARCHITECTURE.md`: "Rug-risk signal
+  design").
+- **Phase 5** — wallet relationship graph (funded/transferred/created/
+  bought/sold edges from already-persisted rows), cross-wallet funder
+  correlation, `/wallet graph` posting a rendered PNG bubble map.
+- **Phase 6** — a paper strategy engine that follows a tracked wallet's own
+  real buys and exits on `CreatorExitRule` (the token's own creator
+  selling), reporting through `/strategy status|positions|pnl`
+  (`docs/ARCHITECTURE.md`: "Why entries don't snipe at launch").
+- **Phase 7** — a backtest engine (`/backtest run`) that replays this
+  deployment's own recorded history through the exact live strategy engine
+  in an isolated scratch database, with look-ahead structurally impossible
+  rather than just avoided (`docs/ARCHITECTURE.md`: "No look-ahead"), plus
+  win rate/PnL/drawdown metrics and strategy comparison.
+- **Phase 8** — the `ExecutionProvider` abstraction (Paper/Manual/Live).
+  `bot_main.py` only ever constructs `PaperExecutionProvider`; live
+  execution is disabled by default, holds no signing material (an
+  externally-injected `Signer` this repo ships zero implementations of),
+  and enforces hard limits before every submission
+  (`docs/ARCHITECTURE.md`: "Safety posture").
+
+229 tests, ruff clean, mypy clean. Not validated against live mainnet or a
+live Discord connection from within a development sandbox — see each
+phase's section in `docs/ROADMAP.md` for exactly what that does and doesn't
+mean for what's been tested.
 
 ## Quickstart
 
@@ -74,12 +87,17 @@ docker compose up --build
 
 ## Safety posture
 
-This project defaults to **observation and paper trading only**. There is no live
-execution path in the codebase yet, and when one is added (last, per the roadmap) it
-will ship disabled by default, gated behind explicit admin configuration, with hard
-limits (max trade size, daily loss limit, position count, slippage, liquidity floor)
-and manual confirmation before any real order. Private keys are never accepted through
-Discord and are never stored in `.env`, the database, or logs.
+This project defaults to **observation and paper trading only**. `bot_main.py` never
+constructs anything but `PaperExecutionProvider` — there is no way to reach live
+execution by running this bot as it exists in this repository. `execution/live.py`'s
+`LiveExecutionProvider` ships disabled by default, holds no signing material (it
+depends on an externally-injected `Signer` this repo ships zero implementations of —
+see its own docstring for why that's permanent), and enforces hard limits (max trade
+size, trailing-24h realized-loss cap, max open positions) before every submission.
+`execution/manual.py` adds an explicit confirmation gate on top of any provider for
+manual-approval workflows. Private keys are never accepted through Discord and are
+never stored in `.env`, the database, or logs — not a policy, a structural fact about
+what code exists in this repository.
 
 ## Project layout
 
@@ -127,6 +145,11 @@ src/snipe_rugg/
     source.py                     # load_events(): live DB history -> ReplayEvent feed
     metrics.py                    # win rate / PnL / drawdown / hold time
     service.py                    # BacktestService: scratch-DB provisioning, run()/compare()
+  execution/
+    base.py                      # ExecutionProvider Protocol
+    paper.py                      # PaperExecutionProvider - the only one bot_main.py builds
+    manual.py                     # ManualExecutionProvider - confirmation gate, no UI wired
+    live.py                       # LiveExecutionProvider - disabled by default, no key ever
   db/
     base.py                     # async engine/session
     types.py                     # ExactNumeric: exact Decimal storage on SQLite too
@@ -143,7 +166,7 @@ src/snipe_rugg/
     bot.py                         # app_commands wiring
     alert_sink.py                  # the concrete AlertSink that posts to a channel
   main.py                         # Phase 1 demo entrypoint
-  bot_main.py                      # full Phase 1-7 composition root
+  bot_main.py                      # full Phase 1-8 composition root
 tests/                        # pytest + pytest-asyncio, incl. a real mock WS server
 docs/                          # architecture, roadmap, provider matrix
 ```

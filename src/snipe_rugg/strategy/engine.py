@@ -25,6 +25,13 @@ position's full size could be filled at the same observed price with no
 slippage or latency-driven movement — is a documented simplification, stated
 here rather than hidden, since no continuous price feed exists to model
 against.
+
+Opening/closing a position goes through an injected ExecutionProvider (spec
+section 50-53, 95-98, Phase 8) rather than writing to the database directly —
+defaults to PaperExecutionProvider when none is given, so every call site
+from Phases 6-7 kept working unchanged. This is also what makes a live
+execution mode a matter of injecting a different provider here, not
+rewriting this file.
 """
 from __future__ import annotations
 
@@ -37,6 +44,8 @@ from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.decoder.constants import WRAPPED_SOL_MINT
 from snipe_rugg.decoder.models import EventType, NormalizedTrade
 from snipe_rugg.dev.service import DevMonitorService
+from snipe_rugg.execution.base import ExecutionProvider
+from snipe_rugg.execution.paper import PaperExecutionProvider
 from snipe_rugg.strategy.models import ExitReason, StrategyConfig
 from snipe_rugg.strategy.rules import should_enter
 
@@ -64,10 +73,12 @@ class StrategyEngine:
         session_factory: async_sessionmaker[AsyncSession],
         dev_monitor: DevMonitorService,
         config: StrategyConfig | None = None,
+        execution: ExecutionProvider | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._dev_monitor = dev_monitor
         self._config = config or StrategyConfig()
+        self._execution = execution or PaperExecutionProvider(session_factory)
 
     async def handle_trade(self, trade: NormalizedTrade) -> None:
         if not self._config.enabled:
@@ -98,20 +109,20 @@ class StrategyEngine:
             assessment = await self._dev_monitor.assess(token.creator_address)
             if not should_enter(assessment, config=self._config):
                 return
+            creator_address = token.creator_address
 
-            entry_token_amount = self._config.position_size_sol / entry_price
-            position = await repo.open_paper_position(
-                mint=mint,
-                creator_address=token.creator_address,
-                followed_wallet=trade.wallet,
-                entry_signature=trade.signature,
-                entry_slot=trade.slot,
-                entry_block_time=trade.block_time,
-                entry_sol_amount=self._config.position_size_sol,
-                entry_token_amount=entry_token_amount,
-                entry_price_sol=entry_price,
-            )
-            await session.commit()
+        position = await self._execution.open_position(
+            mint=mint,
+            creator_address=creator_address,
+            followed_wallet=trade.wallet,
+            sol_amount=self._config.position_size_sol,
+            price_sol=entry_price,
+            signature=trade.signature,
+            slot=trade.slot,
+            block_time=trade.block_time,
+        )
+        if position is None:
+            return
 
         logger.info(
             "paper_position_opened",
@@ -140,18 +151,14 @@ class StrategyEngine:
             if position is None or position.creator_address != trade.wallet:
                 return  # only the token's own creator selling triggers CreatorExitRule
 
-            realized_pnl = position.entry_token_amount * exit_price - position.entry_sol_amount
-            closed = await repo.close_paper_position(
-                position.id,
-                exit_signature=trade.signature,
-                exit_slot=trade.slot,
-                exit_block_time=trade.block_time,
-                exit_price_sol=exit_price,
-                exit_reason=ExitReason.CREATOR_SOLD.value,
-                realized_pnl_sol=realized_pnl,
-            )
-            await session.commit()
-
+        closed = await self._execution.close_position(
+            position,
+            price_sol=exit_price,
+            signature=trade.signature,
+            slot=trade.slot,
+            block_time=trade.block_time,
+            reason=ExitReason.CREATOR_SOLD.value,
+        )
         if closed is None:
             return
         logger.info(
@@ -162,7 +169,7 @@ class StrategyEngine:
                     "mint": mint,
                     "exit_reason": ExitReason.CREATOR_SOLD.value,
                     "exit_price_sol": str(exit_price),
-                    "realized_pnl_sol": str(realized_pnl),
+                    "realized_pnl_sol": str(closed.realized_pnl_sol),
                 }
             },
         )

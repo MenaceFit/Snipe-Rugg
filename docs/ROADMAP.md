@@ -311,15 +311,50 @@ sandbox, there is no real historical data yet for `/backtest run` to
 actually replay — it's exercised in tests against synthetic-but-realistic
 seeded history, the same honesty posture as every other phase's fixtures.
 
-## Phase 8 — Optional execution adapter — not started, built last
+## Phase 8 — Optional execution adapter — **done**
 
-Spec sections 50–53, 95–98.
+Spec sections 50–53, 95–98. Built last, after the detection engine and
+paper trading (Phases 1–7) were validated through 200+ tests — not
+alongside them.
 
-- `ExecutionProvider` abstraction (`PaperExecutionProvider`,
-  `ManualExecutionProvider`, `LiveExecutionProvider`).
-- Built **only after** the detection engine and paper trading are validated —
-  not alongside them.
-- Live mode ships disabled by default; requires explicit admin configuration,
-  hard limits (max trade, daily loss limit, max positions, slippage limit,
-  liquidity minimum), and manual confirmation per trade.
-- No private key ever accepted through Discord, `.env`, the database, or logs.
+- `execution/base.py` (`ExecutionProvider`): `StrategyEngine` now opens and
+  closes positions through an injected provider instead of writing to the
+  database directly. Defaults to `PaperExecutionProvider` when none is
+  given, so every Phase 6-7 call site — and every one of their tests — kept
+  working completely unchanged; this is the actual proof that the
+  abstraction was inserted at the right seam.
+- `execution/paper.py` (`PaperExecutionProvider`): a pure extraction of the
+  simulated-fill logic that used to live inline in `strategy/engine.py` —
+  no behavior change. The only provider `bot_main.py` ever constructs.
+- `execution/manual.py` (`ManualExecutionProvider`): spec section 95-98's
+  "manual confirmation before any real order," as a confirmation gate
+  wrapped around another provider. No Discord UI (an embed with buttons, a
+  timeout) is wired to its `confirm` callback in this repository — nothing
+  here constructs a provider that would need gating, so building that UI is
+  left for whoever actually enables live execution, not bundled in
+  speculatively.
+- `execution/live.py` (`LiveExecutionProvider`): the only code path that can
+  ever submit a real transaction, and it's unreachable through
+  `bot_main.py` as this repository stands. Three structural (not just
+  configured) guarantees: **disabled by default**
+  (`LiveExecutionConfig.enabled = False`); **never touches a private key** —
+  submission goes through an externally-injected `Signer` Protocol this
+  repository ships zero implementations of, permanently (see the module's
+  own docstring); **hard limits checked before every signer call** — max
+  trade size, a trailing-24h realized-loss cap (queried from real closed
+  positions, never estimated), max open positions. Two spec-named limits
+  (slippage ceiling, minimum liquidity) are accepted as config fields for
+  shape-completeness but not enforced — this codebase has no live price
+  feed or DEX liquidity read to check them against, the same documented gap
+  `strategy/engine.py` already applies to entry pricing; not silently
+  ignored, the config fields' own docstrings say so.
+- **Bugs found via these tests, fixed project-wide**: a sibling of Phase 6's
+  `ExactNumeric` bug — plain `DateTime(timezone=True)` also loses tzinfo
+  through SQLite, surfaced the moment live-execution's loss-limit check
+  compared a DB-read timestamp against a live `utc_now()`. Fixed with
+  `db/types.py`'s `UTCDateTime`, applied to every timestamp column in
+  `db/models.py`. See `docs/ARCHITECTURE.md`'s "Type fidelity on SQLite".
+
+No private key is ever accepted through Discord, `.env`, the database, or
+logs — not a runtime check, a structural fact: there is no code path in this
+repository that reads, derives, or stores one.

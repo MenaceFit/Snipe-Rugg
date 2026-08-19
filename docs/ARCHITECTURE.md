@@ -156,6 +156,12 @@ see `ROADMAP.md`.
   (priced from that trade's own observed rate); `CreatorExitRule` closes on
   the token's own creator selling that mint. See "Why entries don't snipe at
   launch" below.
+- `execution/base.py`, `execution/paper.py`, `execution/manual.py`,
+  `execution/live.py` — the `ExecutionProvider` abstraction (spec section
+  50-53, 95-98, Phase 8): `StrategyEngine` opens/closes positions through an
+  injected provider instead of writing to the database directly, defaulting
+  to `PaperExecutionProvider` when none is given. See "Safety posture" below
+  for `LiveExecutionProvider`'s specific guarantees.
 - `backtest/replay.py`, `backtest/source.py`, `backtest/metrics.py`,
   `backtest/service.py` — historical replay (spec section 41-47, 82-83,
   91-94, 134-136): `ReplayEngine` runs the exact live `StrategyEngine` against
@@ -256,7 +262,11 @@ accidentally query, whether or not the code remembers to check timestamps.
 `backtest/service.py` is responsible for actually provisioning that isolated
 database and must never point `ReplayEngine` at the live production one.
 
-## Numeric precision on SQLite (`db/types.py`)
+## Type fidelity on SQLite (`db/types.py`)
+
+Two bugs, same root cause, found one phase apart: SQLite's storage classes
+are looser than what SQLAlchemy's type layer implies, and both only became
+visible once real cross-value arithmetic/comparison exercised them.
 
 Plain `sqlalchemy.Numeric` does not round-trip a `Decimal` exactly through
 SQLite: SQLite has no fixed-point decimal storage class, so a bound Decimal
@@ -271,6 +281,18 @@ decimal string on SQLite and the database's own native `NUMERIC` — already
 exact — everywhere else (postgres, this project's actual production target
 per `.env.example`). Every monetary/token-amount column in `db/models.py`
 uses it; use it for any new one too.
+
+Plain `sqlalchemy.DateTime(timezone=True)` has the same problem for
+timestamps: a bound tz-aware `datetime` comes back naive from SQLite, which
+only surfaced when Phase 8's live-execution-limit code compared a DB-read
+timestamp against a fresh `core.clock.utc_now()` directly (`TypeError:
+can't compare offset-naive and offset-aware datetimes` — a loud failure,
+not a silent one, since two naive datetimes had always been diffed against
+each other before, never against a fresh tz-aware value). `UTCDateTime`
+(`db/types.py`) reattaches `tzinfo=UTC` on the way out of SQLite — every
+timestamp in this project is UTC — and passes through unchanged on
+postgres. Every timestamp column in `db/models.py` uses it; use it for any
+new one too.
 
 ## Concurrency notes (read before touching `solana_ws.py`)
 
@@ -310,11 +332,24 @@ belongs in its own phase, not bundled quietly into this one.
 
 ## Safety posture
 
-- No execution path exists in this codebase yet.
 - `/wallet import <private_key>` (or any Discord command accepting a private
-  key) must never be implemented — this is a hard constraint, not a default.
-- When a live execution adapter is eventually built (last, per the roadmap),
-  it ships disabled by default, gated behind explicit admin configuration,
-  with hard limits (max trade size, daily loss cap, max open positions,
-  slippage ceiling, minimum liquidity) and manual confirmation before any
-  real order.
+  key) must never be implemented — this is a hard constraint, not a default,
+  and nothing in this codebase does it.
+- `execution/live.py`'s `LiveExecutionProvider` is the only code path that
+  can ever submit a real transaction, and `bot_main.py` never constructs it
+  — the running bot only ever uses `execution/paper.py`'s
+  `PaperExecutionProvider` (via `StrategyEngine`'s default). There is no way
+  to reach live execution by running `python -m snipe_rugg.bot_main` as it
+  exists in this repository today.
+- `LiveExecutionProvider` ships disabled by default
+  (`LiveExecutionConfig.enabled = False`) and holds no signing material —
+  submission goes through an externally-injected `Signer` Protocol that this
+  repository ships zero implementations of; see `execution/live.py`'s
+  docstring for why that's permanent, not an oversight. Hard limits (max
+  trade size, trailing-24h realized-loss cap, max open positions — all
+  queried from real data, never estimated) are checked before every signer
+  call. `execution/manual.py`'s `ManualExecutionProvider` adds an explicit
+  confirmation gate in front of any provider, for spec section 95-98's
+  "manual confirmation before any real order" — no Discord UI is wired to it
+  yet, since nothing in this repository ever constructs a provider that
+  would need gating.

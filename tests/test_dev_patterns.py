@@ -14,20 +14,28 @@ CREATOR = "DevWallet111"
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _profile(**overrides) -> DevProfile:
-    base = {
-        "creator_address": CREATOR,
-        "total_launches": 1,
-        "graduated_count": 1,
-        "graduation_rate": 1.0,
-        "first_launch_at": T0,
-        "last_launch_at": T0,
-        "avg_seconds_between_launches": None,
-        "avg_seconds_to_graduation": 60.0,
-        "early_sell_count": 0,
-    }
-    base.update(overrides)
-    return DevProfile(**base)
+def _profile(
+    *,
+    total_launches: int = 1,
+    graduated_count: int = 1,
+    graduation_rate: float | None = 1.0,
+    first_launch_at: datetime | None = T0,
+    last_launch_at: datetime | None = T0,
+    avg_seconds_between_launches: float | None = None,
+    avg_seconds_to_graduation: float | None = 60.0,
+    early_sell_count: int = 0,
+) -> DevProfile:
+    return DevProfile(
+        creator_address=CREATOR,
+        total_launches=total_launches,
+        graduated_count=graduated_count,
+        graduation_rate=graduation_rate,
+        first_launch_at=first_launch_at,
+        last_launch_at=last_launch_at,
+        avg_seconds_between_launches=avg_seconds_between_launches,
+        avg_seconds_to_graduation=avg_seconds_to_graduation,
+        early_sell_count=early_sell_count,
+    )
 
 
 def test_clean_profile_has_no_signals_and_no_overall_severity():
