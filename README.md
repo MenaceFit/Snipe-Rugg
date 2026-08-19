@@ -15,7 +15,7 @@ Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─▶ Decoder
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for build order and current status.
 
-## Status: Phase 6 — Strategy
+## Status: Phase 7 — Backtest
 
 Done so far: Phase 1 (WebSocket connectivity to Solana, reconnect/resubscribe,
 gap-recovery backfill, event normalization, dedup, latency telemetry), Phase 2
@@ -36,9 +36,13 @@ plus a text summary), and Phase 6 (a paper strategy engine that follows a
 tracked wallet's own real buys, exits on `CreatorExitRule` — the token's own
 creator selling — and reports through `/strategy status|positions|pnl`; see
 `docs/ARCHITECTURE.md`'s "Why entries don't snipe at launch" for why entries
-follow a real trade rather than firing the instant a launch is detected).
-Backtesting and optional live execution are later phases — see the roadmap —
-and aren't implemented yet.
+follow a real trade rather than firing the instant a launch is detected), and
+Phase 7 (a backtest engine that replays this deployment's own recorded
+history through the exact live strategy engine in an isolated scratch
+database, with look-ahead structurally impossible rather than just avoided —
+see `docs/ARCHITECTURE.md`'s "No look-ahead" — plus win rate/PnL/drawdown
+metrics and `/backtest run`). Optional live execution is the last phase — see
+the roadmap — and isn't implemented yet.
 
 ## Quickstart
 
@@ -118,6 +122,11 @@ src/snipe_rugg/
   strategy/
     rules.py                     # should_enter(): dev-risk gate over a DevRiskAssessment
     engine.py                     # StrategyEngine: TOPIC_NEW_TRADE -> paper entries/exits
+  backtest/
+    replay.py                    # ReplayEngine: chronological, isolated-DB replay
+    source.py                     # load_events(): live DB history -> ReplayEvent feed
+    metrics.py                    # win rate / PnL / drawdown / hold time
+    service.py                    # BacktestService: scratch-DB provisioning, run()/compare()
   db/
     base.py                     # async engine/session
     types.py                     # ExactNumeric: exact Decimal storage on SQLite too
@@ -134,7 +143,7 @@ src/snipe_rugg/
     bot.py                         # app_commands wiring
     alert_sink.py                  # the concrete AlertSink that posts to a channel
   main.py                         # Phase 1 demo entrypoint
-  bot_main.py                      # full Phase 1-6 composition root
+  bot_main.py                      # full Phase 1-7 composition root
 tests/                        # pytest + pytest-asyncio, incl. a real mock WS server
 docs/                          # architecture, roadmap, provider matrix
 ```

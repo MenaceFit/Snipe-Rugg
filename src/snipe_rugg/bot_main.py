@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from snipe_rugg.backtest.service import BacktestService
 from snipe_rugg.config import get_settings
 from snipe_rugg.core.dedup import InMemoryDeduplicator
 from snipe_rugg.core.event_bus import EventBus
@@ -23,6 +24,7 @@ from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.discord_bot.alert_sink import DiscordAlertSink
 from snipe_rugg.discord_bot.bot import build_bot
 from snipe_rugg.discord_bot.services import (
+    BacktestCommandService,
     DevCommandService,
     GraphCommandService,
     StrategyCommandService,
@@ -82,6 +84,7 @@ async def run() -> None:
         dev_service=DevCommandService(dev_monitor=dev_monitor),
         graph_service=GraphCommandService(graph_service=GraphService(session_factory)),
         strategy_service=StrategyCommandService(session_factory=session_factory, config=strategy_config),
+        backtest_service=BacktestCommandService(backtest_service=BacktestService(session_factory)),
     )
     alert_sink = DiscordAlertSink(bot, channel_id=settings.discord_alert_channel_id)
     wallet_tracker = WalletTracker(

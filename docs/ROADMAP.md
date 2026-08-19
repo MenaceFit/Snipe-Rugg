@@ -260,14 +260,56 @@ Not validated against live mainnet (same constraint as prior phases). No
 backtest exists yet to validate these thresholds/PnL logic against
 historical data — that's Phase 7.
 
-## Phase 7 — Backtest — not started
+## Phase 7 — Backtest — **done**
 
 Spec sections 41–47, 82–83, 91–94, 134–136.
 
-- Historical replay engine (1x/10x/100x/1000x), latency/fee/slippage
-  simulation, strategy comparison and parameter optimization.
-- No look-ahead bias: a backtested decision only ever sees data that would
-  have been available at that moment.
+- `backtest/replay.py` (`ReplayEngine`): runs `strategy/engine.py`'s exact
+  live `StrategyEngine` against already-persisted history — not a separate
+  backtest-only reimplementation, so a strategy that performs well in
+  backtest is provably the same code path that runs live. `ReplayEvent`s are
+  always sorted into chronological order before processing, regardless of
+  the order they're handed in, and applied one at a time to an isolated
+  scratch database that starts empty. Speed multiplier (1x/10x/100x/1000x):
+  optional pacing between events (`real_gap / multiplier`, capped at 5s/step)
+  — off by default, since nothing watches a replay over wall-clock time yet.
+- **No look-ahead, enforced by construction**: a Token/TokenTrade row only
+  exists in the scratch database once its own event has actually been
+  replayed, so a strategy decision at time T structurally cannot see
+  anything that only happened after T — there's no future data sitting in
+  the database to accidentally query. Proven directly in
+  `test_backtest_replay.py`: 9 more launches from the same creator, placed
+  *earlier in the input list* than an early buy but with genuinely later
+  timestamps, do not block that buy's entry (they would, if visible early —
+  a paired test confirms the same 9 launches placed genuinely first *do*
+  block it, so this isn't a threshold that never fires).
+- `backtest/source.py`: builds the replay's event feed from this
+  deployment's own recorded `tokens`/`token_trades` history — never a
+  separately-fabricated dataset.
+- `backtest/metrics.py`: win rate, total PnL, max drawdown (from a
+  chronological running-equity curve), average hold time — computed only
+  from real closed `PaperPosition` rows.
+- `backtest/service.py` (`BacktestService`): provisions a fresh scratch
+  database per run/per compared config, so a backtest can never mutate live
+  paper-trading state and live state can never leak look-ahead into a
+  backtest. `compare()` replays the identical historical feed through
+  multiple `StrategyConfig`s (spec's "strategy comparison / parameter
+  optimization").
+- `/backtest run [position_size_sol] [max_open_positions] [skip_high_risk_creators]`.
+- **Fee/slippage simulation, explicitly scoped out, not silently assumed
+  zero**: entry/exit prices are always a real observed trade's own rate (see
+  Phase 6), so whatever slippage that real trade actually experienced is
+  already baked in — there's nothing extra to simulate on top of an already-
+  real number. Transaction fees are a genuine gap: `DecodedTransaction`
+  already carries a real `fee_lamports` per transaction, but it isn't
+  threaded through `NormalizedTrade`/`TokenTrade` yet, so backtest PnL
+  doesn't subtract it. See `backtest/metrics.py`'s docstring.
+
+Not validated against live mainnet (same constraint as prior phases) and,
+because no live tracking has run against real mainnet data from within this
+sandbox, there is no real historical data yet for `/backtest run` to
+actually replay — it's exercised in tests against synthetic-but-realistic
+seeded history, the same honesty posture as every other phase's fixtures.
 
 ## Phase 8 — Optional execution adapter — not started, built last
 

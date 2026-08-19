@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from snipe_rugg.backtest.service import BacktestService
 from snipe_rugg.db.models import WalletStatus
 from snipe_rugg.db.repository import (
     GroupAlreadyExists,
@@ -245,3 +246,44 @@ class StrategyCommandService:
             f"{len(closed)} closed position(s) — {wins} win(s), {len(closed) - wins} loss(es)\n"
             f"Total realized PnL: {total_pnl} SOL"
         )
+
+
+class BacktestCommandService:
+    """spec section 41-47, 82-83, 91-94, 134-136: replays this deployment's
+    own recorded history through the exact live StrategyEngine in an
+    isolated scratch database (backtest/service.py) — never the live
+    paper-trading ledger, so running a backtest can't corrupt real state and
+    real state can't leak look-ahead into a backtest."""
+
+    def __init__(self, *, backtest_service: BacktestService) -> None:
+        self._backtest_service = backtest_service
+
+    async def run(
+        self,
+        *,
+        position_size_sol: float | None = None,
+        max_open_positions: int | None = None,
+        skip_high_risk_creators: bool | None = None,
+    ) -> str:
+        overrides: dict[str, object] = {}
+        if position_size_sol is not None:
+            overrides["position_size_sol"] = Decimal(str(position_size_sol))
+        if max_open_positions is not None:
+            overrides["max_open_positions"] = max_open_positions
+        if skip_high_risk_creators is not None:
+            overrides["skip_high_risk_creators"] = skip_high_risk_creators
+        config = StrategyConfig(**overrides) if overrides else None  # type: ignore[arg-type]
+
+        metrics = await self._backtest_service.run(config=config)
+        if metrics.total_trades == 0:
+            return "No historical launches/trades recorded yet — nothing to backtest."
+
+        lines = [
+            f"Backtest over {metrics.total_trades} closed position(s)",
+            f"Win rate: {metrics.win_rate:.0%} ({metrics.wins}W / {metrics.losses}L)",
+            f"Total PnL: {metrics.total_pnl_sol} SOL",
+            f"Max drawdown: {metrics.max_drawdown_sol} SOL",
+        ]
+        if metrics.avg_hold_seconds is not None:
+            lines.append(f"Avg hold time: {metrics.avg_hold_seconds:.0f}s")
+        return "\n".join(lines)

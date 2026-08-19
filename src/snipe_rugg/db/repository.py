@@ -245,6 +245,17 @@ class WalletRepository:
         )
         return list(result.scalars().all())
 
+    async def list_all_tokens(self) -> list[Token]:
+        """Every launched token, for backtest/replay.py to source a
+        chronological event feed from — not used on any hot path."""
+        result = await self._session.execute(select(Token).order_by(Token.first_seen_slot))
+        return list(result.scalars().all())
+
+    async def list_all_trades(self) -> list[TokenTrade]:
+        """Every recorded trade, for backtest/replay.py — see list_all_tokens."""
+        result = await self._session.execute(select(TokenTrade).order_by(TokenTrade.slot))
+        return list(result.scalars().all())
+
     async def list_trades_for_wallet(self, wallet_address: str) -> list[TokenTrade]:
         result = await self._session.execute(
             select(TokenTrade).where(TokenTrade.wallet_address == wallet_address).order_by(TokenTrade.slot)

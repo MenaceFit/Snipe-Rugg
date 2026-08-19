@@ -156,6 +156,12 @@ see `ROADMAP.md`.
   (priced from that trade's own observed rate); `CreatorExitRule` closes on
   the token's own creator selling that mint. See "Why entries don't snipe at
   launch" below.
+- `backtest/replay.py`, `backtest/source.py`, `backtest/metrics.py`,
+  `backtest/service.py` — historical replay (spec section 41-47, 82-83,
+  91-94, 134-136): `ReplayEngine` runs the exact live `StrategyEngine` against
+  a chronologically-sorted `ReplayEvent` feed, applied to an isolated scratch
+  database — see "No look-ahead" below for why that's what actually
+  prevents look-ahead, not just discipline in the replay loop.
 - `graph/builder.py`, `graph/analysis.py`, `graph/service.py`,
   `graph/render.py` — the wallet relationship graph (spec section 64-69, 122,
   144-145): `build_wallet_graph()` turns persisted rows into a typed
@@ -235,6 +241,20 @@ already-priced transaction — using its own `amount_in`/`amount_out` ratio as
 the entry price costs nothing invented. This is a documented scope limit, not
 a silent gap: a live bonding-curve read is a natural next step once its
 layout is verified against Pump.fun's current docs at implementation time.
+
+## No look-ahead (spec section 41-47, `backtest/replay.py`)
+
+A backtest is only honest if a decision at time T never sees data from after
+T. `ReplayEngine` doesn't just sort `ReplayEvent`s chronologically before
+processing (regardless of the order they're handed in) — it applies each one
+to an *isolated scratch database that starts empty*. A launch or trade only
+exists as a row in that database once its own event has actually been
+replayed, so `StrategyEngine`'s DB reads (via `DevMonitorService`, `get_token`,
+etc.) structurally cannot observe anything that hasn't happened yet in the
+replay timeline — there's no future data sitting in the database to
+accidentally query, whether or not the code remembers to check timestamps.
+`backtest/service.py` is responsible for actually provisioning that isolated
+database and must never point `ReplayEngine` at the live production one.
 
 ## Numeric precision on SQLite (`db/types.py`)
 

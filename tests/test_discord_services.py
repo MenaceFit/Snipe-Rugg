@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 from sqlalchemy.pool import StaticPool
 
+from snipe_rugg.backtest.service import BacktestService
+from snipe_rugg.core.clock import utc_now
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
 from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.decoder.models import EventType, NormalizedActivity, NormalizedTrade
 from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.discord_bot.services import (
+    BacktestCommandService,
     DevCommandService,
     GraphCommandService,
     StrategyCommandService,
@@ -248,3 +252,42 @@ async def test_strategy_positions_and_pnl_reflect_a_full_round_trip(session_fact
     # default position_size_sol=0.1: entry 0.1 SOL @ 0.001 SOL/token = 100 tokens;
     # exit @ 0.002 SOL/token = 0.2 SOL proceeds; pnl = 0.2 - 0.1
     assert "Total realized PnL: 0.1 SOL" in pnl_reply
+
+
+async def test_backtest_run_reports_no_history_when_nothing_recorded(session_factory):
+    service = BacktestCommandService(backtest_service=BacktestService(session_factory))
+    reply = await service.run()
+    assert "nothing to backtest" in reply
+
+
+async def test_backtest_run_replays_recorded_history_and_reports_metrics(session_factory):
+    mint = "MintXYZ1111111111111111111111111111111111"
+    creator = "DevWallet333"
+    now = utc_now()
+    async with session_factory() as session:
+        repo = WalletRepository(session)
+        await repo.record_token_launch(
+            LaunchEvent(mint=mint, creator=creator, launchpad="Pump.fun", pair="SOL", slot=1, block_time=now, signature="sig-launch")
+        )
+        await repo.record_trade(
+            NormalizedTrade(
+                wallet="TraderWallet111", token_in="SOL", token_out=mint, amount_in=Decimal("1.0"), amount_out=Decimal(1000),
+                side=EventType.BUY, program="PumpSwap", slot=2, block_time=now + timedelta(minutes=1), signature="sig-buy",
+                confidence="high",
+            )
+        )
+        await repo.record_trade(
+            NormalizedTrade(
+                wallet=creator, token_in=mint, token_out="SOL", amount_in=Decimal(1000), amount_out=Decimal("2.0"),
+                side=EventType.SELL, program="PumpSwap", slot=3, block_time=now + timedelta(minutes=5), signature="sig-sell",
+                confidence="high",
+            )
+        )
+        await session.commit()
+
+    service = BacktestCommandService(backtest_service=BacktestService(session_factory))
+    reply = await service.run(position_size_sol=1.0)
+
+    assert "1 closed position(s)" in reply
+    assert "1W / 0L" in reply
+    assert "Total PnL: 1.0 SOL" in reply

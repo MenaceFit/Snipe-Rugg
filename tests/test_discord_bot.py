@@ -4,8 +4,15 @@ groups expose the right subcommands without needing a live Discord connection
 .sync() actually talks to Discord's API, which nothing here does)."""
 from __future__ import annotations
 
-from snipe_rugg.discord_bot.bot import DevGroup, StrategyGroup, WalletGroup, WatchlistGroup
+from snipe_rugg.discord_bot.bot import (
+    BacktestGroup,
+    DevGroup,
+    StrategyGroup,
+    WalletGroup,
+    WatchlistGroup,
+)
 from snipe_rugg.discord_bot.services import (
+    BacktestCommandService,
     DevCommandService,
     GraphCommandService,
     StrategyCommandService,
@@ -40,3 +47,9 @@ def test_strategy_group_exposes_expected_subcommands():
     group = StrategyGroup(StrategyCommandService(session_factory=None, config=StrategyConfig()))  # type: ignore[arg-type]
     names = {c.name for c in group.commands}
     assert names == {"status", "positions", "pnl"}
+
+
+def test_backtest_group_exposes_expected_subcommands():
+    group = BacktestGroup(BacktestCommandService(backtest_service=None))  # type: ignore[arg-type]
+    names = {c.name for c in group.commands}
+    assert names == {"run"}

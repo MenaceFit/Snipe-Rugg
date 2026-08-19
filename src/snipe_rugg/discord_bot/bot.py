@@ -12,6 +12,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from snipe_rugg.discord_bot.services import (
+    BacktestCommandService,
     DevCommandService,
     GraphCommandService,
     StrategyCommandService,
@@ -112,6 +113,33 @@ class StrategyGroup(app_commands.Group):
         await interaction.response.send_message(await self._service.pnl())
 
 
+class BacktestGroup(app_commands.Group):
+    def __init__(self, service: BacktestCommandService) -> None:
+        super().__init__(name="backtest", description="Replay recorded history through the strategy engine")
+        self._service = service
+
+    @app_commands.command(name="run", description="Backtest the strategy over this deployment's recorded history")
+    @app_commands.describe(
+        position_size_sol="Override position size in SOL",
+        max_open_positions="Override max concurrent open positions",
+        skip_high_risk_creators="Override whether HIGH-risk creators are skipped",
+    )
+    async def run(
+        self,
+        interaction: discord.Interaction,
+        position_size_sol: float | None = None,
+        max_open_positions: int | None = None,
+        skip_high_risk_creators: bool | None = None,
+    ) -> None:
+        await interaction.response.defer()
+        reply = await self._service.run(
+            position_size_sol=position_size_sol,
+            max_open_positions=max_open_positions,
+            skip_high_risk_creators=skip_high_risk_creators,
+        )
+        await interaction.followup.send(reply)
+
+
 class SnipeRuggBot(commands.Bot):
     def __init__(
         self,
@@ -121,6 +149,7 @@ class SnipeRuggBot(commands.Bot):
         dev_service: DevCommandService,
         graph_service: GraphCommandService,
         strategy_service: StrategyCommandService,
+        backtest_service: BacktestCommandService,
         intents: discord.Intents | None = None,
     ) -> None:
         super().__init__(command_prefix="!", intents=intents or discord.Intents.default())
@@ -129,12 +158,14 @@ class SnipeRuggBot(commands.Bot):
         self._dev_service = dev_service
         self._graph_service = graph_service
         self._strategy_service = strategy_service
+        self._backtest_service = backtest_service
 
     async def setup_hook(self) -> None:
         self.tree.add_command(WalletGroup(self._wallet_service, self._graph_service))
         self.tree.add_command(WatchlistGroup(self._watchlist_service))
         self.tree.add_command(DevGroup(self._dev_service))
         self.tree.add_command(StrategyGroup(self._strategy_service))
+        self.tree.add_command(BacktestGroup(self._backtest_service))
         await self.tree.sync()
 
 
@@ -145,6 +176,7 @@ def build_bot(
     dev_service: DevCommandService,
     graph_service: GraphCommandService,
     strategy_service: StrategyCommandService,
+    backtest_service: BacktestCommandService,
     intents: discord.Intents | None = None,
 ) -> SnipeRuggBot:
     return SnipeRuggBot(
@@ -153,5 +185,6 @@ def build_bot(
         dev_service=dev_service,
         graph_service=graph_service,
         strategy_service=strategy_service,
+        backtest_service=backtest_service,
         intents=intents,
     )
