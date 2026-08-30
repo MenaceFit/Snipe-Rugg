@@ -158,15 +158,73 @@ def _classify_balance_transfers(
     sol_delta = tx.sol_delta_for(wallet)
     if not consumed_sol and abs(sol_delta) > DUST_LAMPORTS_THRESHOLD:
         events.append(
-            _activity(tx, wallet, EventType.TRANSFER, mint="SOL", amount=Decimal(sol_delta) / LAMPORTS_PER_SOL)
+            _activity(
+                tx,
+                wallet,
+                EventType.TRANSFER,
+                mint="SOL",
+                amount=Decimal(sol_delta) / LAMPORTS_PER_SOL,
+                counterparty=_find_transfer_counterparty(tx, wallet, mint="SOL"),
+            )
         )
 
     for delta in tx.spl_deltas_for_owner(wallet):
         if delta.mint in consumed_mints:
             continue
-        events.append(_activity(tx, wallet, EventType.TRANSFER, mint=delta.mint, amount=delta.delta_ui_amount))
+        events.append(
+            _activity(
+                tx,
+                wallet,
+                EventType.TRANSFER,
+                mint=delta.mint,
+                amount=delta.delta_ui_amount,
+                counterparty=_find_transfer_counterparty(tx, wallet, mint=delta.mint),
+            )
+        )
 
     return events
+
+
+def _account_owner(tx: DecodedTransaction, account: str | None) -> str | None:
+    if account is None:
+        return None
+    for change in tx.spl_balance_changes:
+        if change.account == account:
+            return change.owner
+    return None
+
+
+def _find_transfer_counterparty(tx: DecodedTransaction, wallet: str, *, mint: str) -> str | None:
+    """The other side of a balance-delta-detected transfer, read from the
+    RPC's own already-parsed transfer instruction(s) rather than inferred
+    from deltas alone (see "Why balance deltas" in ARCHITECTURE.md — this is
+    the same "read what's already parsed" idea, applied to counterparty
+    resolution). Returns None, not a guess, when no single parsed
+    instruction explains the movement (e.g. a complex multi-hop transaction)
+    — found via testing traders/backfill.py, which is the first caller to
+    actually depend on this field being populated from a real transaction
+    rather than a hand-built test fixture."""
+    for instr in tx.all_instructions():
+        parsed = instr.get("parsed")
+        if not isinstance(parsed, dict):
+            continue
+        program, itype = instr.get("program"), parsed.get("type")
+        info = parsed.get("info") or {}
+
+        if mint == "SOL" and program == "system" and itype in ("transfer", "transferWithSeed"):
+            source, destination = info.get("source"), info.get("destination")
+            if wallet == source:
+                return destination
+            if wallet == destination:
+                return source
+        elif mint != "SOL" and program in ("spl-token", "spl-token-2022") and itype in ("transfer", "transferChecked"):
+            source_owner = _account_owner(tx, info.get("source"))
+            dest_owner = _account_owner(tx, info.get("destination"))
+            if wallet == source_owner:
+                return dest_owner
+            if wallet == dest_owner:
+                return source_owner
+    return None
 
 
 def _classify_instruction_activities(tx: DecodedTransaction, wallet: str) -> list[NormalizedActivity]:

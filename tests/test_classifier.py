@@ -53,6 +53,24 @@ def test_plain_sol_transfer_is_not_a_trade():
     assert activity.event_type is EventType.TRANSFER
     assert activity.mint == "SOL"
     assert activity.amount == Decimal("-0.200005")
+    assert activity.counterparty == "SomeOtherWallet11111111111111111111111111111"
+
+
+def test_sol_transfer_counterparty_is_populated_from_the_receivers_side_too():
+    """Regression test: counterparty used to be silently left None for every
+    balance-delta-detected TRANSFER (SOL or SPL), on both the sender's and
+    receiver's side - never caught because every prior test built
+    NormalizedActivity objects by hand instead of running a real transaction
+    through classify(). traders/backfill.py's funder-detection is the first
+    real caller that depends on this, and it surfaced the gap immediately."""
+    tx = decoder.decode(load_fixture("tx_sol_transfer.json"))
+    events = classify(tx, "SomeOtherWallet11111111111111111111111111111")
+
+    assert len(events) == 1
+    activity = events[0]
+    assert isinstance(activity, NormalizedActivity)
+    assert activity.amount == Decimal("0.2")
+    assert activity.counterparty == WALLET_BUYER
 
 
 def test_self_mint_is_not_misclassified_as_a_buy():
