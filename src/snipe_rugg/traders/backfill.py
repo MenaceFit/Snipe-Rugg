@@ -32,7 +32,7 @@ DEFAULT_MINT_BACKFILL_LIMIT = 300
 DEFAULT_WALLET_FUNDER_BACKFILL_LIMIT = 50
 
 
-async def _fetch_transactions(rpc: TransactionProvider, signatures: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def fetch_transactions(rpc: TransactionProvider, signatures: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ok_signatures = [entry["signature"] for entry in signatures if entry.get("err") is None and entry.get("signature")]
 
     async def _fetch(signature: str) -> dict[str, Any] | None:
@@ -54,7 +54,7 @@ async def backfill_mint_trades(
     signer — this is what makes "top traders of a token nobody explicitly
     tracks" possible at all."""
     signatures = await rpc.get_signatures_for_address(mint, limit=limit)
-    raw_transactions = await _fetch_transactions(rpc, signatures)
+    raw_transactions = await fetch_transactions(rpc, signatures)
 
     decoder = TransactionDecoder()
     trades: list[NormalizedTrade] = []
@@ -75,7 +75,7 @@ async def backfill_wallet_funders(
     signatures — the "who funded this wallet" signal traders/insiders.py
     correlates against a token's creator and against other top traders."""
     signatures = await rpc.get_signatures_for_address(wallet, limit=limit)
-    raw_transactions = await _fetch_transactions(rpc, signatures)
+    raw_transactions = await fetch_transactions(rpc, signatures)
 
     decoder = TransactionDecoder()
     funders: set[str] = set()
