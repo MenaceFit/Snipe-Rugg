@@ -1,9 +1,10 @@
 """Full bot entrypoint: the composition root for all 8 phases (real-time
 ingestion, wallet tracking, launch/graduation tracking, dev-risk monitoring,
 the relationship graph, paper strategy engine, backtesting, and the execution
-adapter). This is what actually satisfies spec section 152's success
-criteria end-to-end (add a wallet, see its activity, get an alert) —
-main.py stays the Phase-1-only demo it always was.
+adapter) plus Phase 9's on-demand top-trader/insider discovery. This is what
+actually satisfies spec section 152's success criteria end-to-end (add a
+wallet, see its activity, get an alert) — main.py stays the Phase-1-only
+demo it always was.
 
 Only ever constructs execution/paper.py's PaperExecutionProvider — see
 docs/ARCHITECTURE.md's "Safety posture" for why live execution isn't
@@ -33,9 +34,11 @@ from snipe_rugg.discord_bot.services import (
     DevCommandService,
     GraphCommandService,
     StrategyCommandService,
+    TraderCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
+from snipe_rugg.discovery.dexscreener import DexScreenerClient
 from snipe_rugg.graph.service import GraphService
 from snipe_rugg.ingestion.gap_recovery import GapRecoveryService
 from snipe_rugg.ingestion.pipeline import TOPIC_NORMALIZED_EVENT, IngestionPipeline
@@ -54,6 +57,7 @@ from snipe_rugg.tracking.wallet_tracker import (
     token_subscription_key,
     wallet_subscription_key,
 )
+from snipe_rugg.traders.service import TraderAnalysisService
 
 logger = logging.getLogger("snipe_rugg.bot_main")
 
@@ -83,6 +87,8 @@ async def run() -> None:
 
     dev_monitor = DevMonitorService(session_factory)
     strategy_config = StrategyConfig()
+    dexscreener_client = DexScreenerClient()
+    trader_analysis_service = TraderAnalysisService(rpc=rpc, session_factory=session_factory)
     bot = build_bot(
         wallet_service=WalletCommandService(session_factory=session_factory, provider=manager),
         watchlist_service=WatchlistCommandService(session_factory=session_factory),
@@ -90,6 +96,7 @@ async def run() -> None:
         graph_service=GraphCommandService(graph_service=GraphService(session_factory)),
         strategy_service=StrategyCommandService(session_factory=session_factory, config=strategy_config),
         backtest_service=BacktestCommandService(backtest_service=BacktestService(session_factory)),
+        trader_service=TraderCommandService(dexscreener_client=dexscreener_client, analysis_service=trader_analysis_service),
     )
     alert_sink = DiscordAlertSink(bot, channel_id=settings.discord_alert_channel_id)
     wallet_tracker = WalletTracker(
@@ -146,6 +153,7 @@ async def run() -> None:
         await pipeline.stop()
         await manager.stop()
         await rpc.stop()
+        await dexscreener_client.aclose()
         await engine.dispose()
 
 

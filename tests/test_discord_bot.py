@@ -8,6 +8,7 @@ from snipe_rugg.discord_bot.bot import (
     BacktestGroup,
     DevGroup,
     StrategyGroup,
+    TokenGroup,
     WalletGroup,
     WatchlistGroup,
 )
@@ -16,6 +17,7 @@ from snipe_rugg.discord_bot.services import (
     DevCommandService,
     GraphCommandService,
     StrategyCommandService,
+    TraderCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
@@ -53,3 +55,11 @@ def test_backtest_group_exposes_expected_subcommands():
     group = BacktestGroup(BacktestCommandService(backtest_service=None))  # type: ignore[arg-type]
     names = {c.name for c in group.commands}
     assert names == {"run"}
+
+
+def test_token_group_exposes_expected_subcommands():
+    group = TokenGroup(
+        TraderCommandService(dexscreener_client=None, analysis_service=None)  # type: ignore[arg-type]
+    )
+    names = {c.name for c in group.commands}
+    assert names == {"trending", "traders"}

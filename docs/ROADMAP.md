@@ -358,3 +358,80 @@ alongside them.
 No private key is ever accepted through Discord, `.env`, the database, or
 logs — not a runtime check, a structural fact: there is no code path in this
 repository that reads, derives, or stores one.
+
+## Phase 9 — Top-trader / insider discovery — **done**
+
+Added on request after the original 154-section spec and its mandatory
+Phase 1-8 build order above. Two scope questions were resolved with the
+user via a direct clarifying question before building, rather than guessed:
+**Solana only** (not multi-chain — DexScreener is discovery-only, every
+transaction is still decoded through this project's existing Solana stack),
+and **a bounded recent window** (not genuine all-time history). See
+`ARCHITECTURE.md`'s "Top-trader / insider discovery" for the full design
+rationale.
+
+- `discovery/dexscreener.py` (`DexScreenerClient`) + `discovery/trending.py`
+  (`find_trending_solana_pairs`): trending-token discovery via DexScreener's
+  public search/tokens endpoints (no API key). No dedicated trending
+  endpoint exists, so this derives one (search broadly, filter to Solana +
+  a liquidity floor, sort by 24h volume). Schema cross-referenced from two
+  independent secondary sources, not a live response — both
+  `api.dexscreener.com` and `docs.dexscreener.com` are unreachable from this
+  project's development sandbox; defensive `Optional`/`extra="ignore"`
+  parsing throughout so a schema drift degrades gracefully.
+- `traders/backfill.py`: `backfill_mint_trades()` fetches a mint's recent
+  signatures and classifies each transaction from *its own signer's*
+  perspective (`classify(tx, tx.signer)`) rather than a pre-tracked wallet —
+  the one new decoding idea this phase needed, and the decoder/classifier
+  stack was already general enough to support it unmodified.
+  `backfill_wallet_funders()` reuses the same pattern to find who sent a
+  wallet SOL recently. Both bounded (`DEFAULT_MINT_BACKFILL_LIMIT = 300`,
+  `DEFAULT_WALLET_FUNDER_BACKFILL_LIMIT = 50`), both built on the existing
+  `TransactionProvider` interface and `SolanaRpcHttpClient`'s own
+  concurrency/retry handling — no new rate-limiting code.
+- `traders/stats.py` (`compute_trader_stats`): per-wallet average-cost-basis
+  PnL and win rate over a mint's backfilled trades. A SELL whose matching
+  BUY predates the backfill window has no known cost basis — excluded from
+  PnL/win-rate rather than guessed, tracked in
+  `trades_with_unknown_cost_basis` so a partial-window result is never
+  presented as complete.
+- `traders/insiders.py` (`detect_insider_signals`): correlates top traders'
+  SOL funding sources against the token's creator and against each other,
+  reusing `graph/analysis.py`'s funder-correlation functions unmodified
+  over a freshly-built in-memory graph (not this bot's persisted activity —
+  the point is reasoning about wallets nobody has tracked before). Signals
+  are always hedged — "POSSIBLE INSIDER" / "POSSIBLE SIDE WALLET" — the
+  same spec section 62 discipline `dev/patterns.py` already applies to
+  dev-risk patterns, reused here for a different signal type.
+- `traders/service.py` (`TraderAnalysisService`): orchestrates backfill +
+  stats + creator resolution + insider signals into one
+  `TokenAnalysisReport`. Creator resolution checks this bot's own `tokens`
+  table first, then falls back to a *capped* backward walk over the mint's
+  signature history looking for its creation transaction
+  (`MAX_CREATOR_LOOKUP_PAGES = 3` pages of 1000 signatures) — an old/active
+  mint whose creation falls outside that cap degrades to `creator=None`
+  rather than an unbounded historical walk.
+- `/token trending` and `/token traders <mint>`: `TraderCommandService`
+  (`discord_bot/services.py`) formats a trending list and a top-trader
+  leaderboard with inline insider-signal warnings; both commands defer
+  their Discord response since a real backfill can exceed the 3-second
+  initial-response window (same pattern as `/backtest run`).
+- **Bug found via this phase's tests, fixed at the source**:
+  `decoder/classifier.py`'s balance-delta TRANSFER classification never
+  populated `NormalizedActivity.counterparty` — latent since Phase 2, and
+  silently affecting Phase 5's graph `FUNDED`/`TRANSFERRED` edges too, since
+  every prior test built `NormalizedActivity` by hand rather than running a
+  real transaction through `classify()`. `backfill_wallet_funders()` was
+  the first real caller to depend on it and surfaced the gap immediately.
+  Fixed with `_find_transfer_counterparty()`, reading the RPC's own
+  already-parsed transfer instructions rather than inferring the
+  counterparty — consistent with "read what's already parsed" (see
+  `ARCHITECTURE.md`'s "Why balance deltas"). Regression tests added to
+  `test_classifier.py`.
+- 43 new tests (272 total), ruff clean, mypy clean.
+
+Not validated against live mainnet or a live Discord connection (same
+constraint as every prior phase). Additionally, and unlike every other
+external integration in this codebase, `discovery/dexscreener.py` has not
+been smoke-tested against a real HTTP response at all — see
+`API_MATRIX.md`'s DEX Screener row before relying on it in production.

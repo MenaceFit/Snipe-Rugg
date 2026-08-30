@@ -15,7 +15,7 @@ Helius Enhanced WS   ┴─▶ Event Ingestion ─▶ Event Queue ─▶ Decoder
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for build order and current status.
 
-## Status: all 8 phases complete
+## Status: all 8 phases complete, plus a Phase 9 top-trader/insider feature
 
 - **Phase 1** — WebSocket connectivity to Solana (native + optional Helius),
   reconnect/resubscribe, gap-recovery backfill, event normalization, dedup,
@@ -51,11 +51,25 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
   externally-injected `Signer` this repo ships zero implementations of),
   and enforces hard limits before every submission
   (`docs/ARCHITECTURE.md`: "Safety posture").
+- **Phase 9** — top-trader / possible-insider discovery (`/token trending`,
+  `/token traders <mint>`): DexScreener is used purely to discover which
+  Solana tokens are trending; all transaction analysis reuses this
+  project's own Solana decoder/classifier. For a given mint, backfills
+  recent trades from every wallet that traded it (not just previously
+  tracked ones), computes per-wallet average-cost-basis PnL/win-rate, and
+  correlates top traders' SOL funding sources against the token's creator
+  and each other for "POSSIBLE INSIDER" / "POSSIBLE SIDE WALLET" signals —
+  never a fraud verdict, same discipline as Phase 4's dev-risk patterns.
+  Solana-only and always a bounded recent window, never a genuine all-time
+  history (`docs/ARCHITECTURE.md`: "Top-trader / insider discovery").
 
-229 tests, ruff clean, mypy clean. Not validated against live mainnet or a
+272 tests, ruff clean, mypy clean. Not validated against live mainnet or a
 live Discord connection from within a development sandbox — see each
 phase's section in `docs/ROADMAP.md` for exactly what that does and doesn't
-mean for what's been tested.
+mean for what's been tested. The DexScreener client (Phase 9) additionally
+has not been validated against a live HTTP response at all — both
+`docs.dexscreener.com` and `api.dexscreener.com` are unreachable from this
+project's development sandbox; see `discovery/dexscreener.py`'s docstring.
 
 ## Quickstart
 
@@ -69,8 +83,9 @@ cp .env.example .env   # fill in SOLANA_RPC_WS / HELIUS_API_KEY / DISCORD_TOKEN 
 .venv/bin/python -m snipe_rugg.main --wallet <SOME_WALLET_ADDRESS>
 
 # The real bot: all 8 phases (streaming, tracking, dev monitor, graph,
-# strategy, backtest, execution) wired together, live on Discord. Needs
-# DISCORD_TOKEN and DISCORD_ALERT_CHANNEL_ID in .env.
+# strategy, backtest, execution) plus Phase 9 (trending/top-trader/insider
+# discovery) wired together, live on Discord. Needs DISCORD_TOKEN and
+# DISCORD_ALERT_CHANNEL_ID in .env.
 .venv/bin/python -m snipe_rugg.bot_main
 
 # Tests (no network required — WebSocket behavior is tested against a local
@@ -154,6 +169,14 @@ src/snipe_rugg/
     paper.py                      # PaperExecutionProvider - the only one bot_main.py builds
     manual.py                     # ManualExecutionProvider - confirmation gate, no UI wired
     live.py                       # LiveExecutionProvider - disabled by default, no key ever
+  discovery/
+    dexscreener.py               # DexScreenerClient: public search/tokens endpoints (no API key)
+    trending.py                   # find_trending_solana_pairs(): search + sort by 24h volume
+  traders/
+    backfill.py                  # backfill_mint_trades / backfill_wallet_funders (bounded window)
+    stats.py                      # compute_trader_stats(): average-cost-basis PnL/win-rate
+    insiders.py                   # detect_insider_signals(): funder-correlation, hedged language
+    service.py                    # TraderAnalysisService: backfill + stats + creator + signals
   db/
     base.py                     # async engine/session
     types.py                     # ExactNumeric: exact Decimal storage on SQLite too
@@ -166,11 +189,11 @@ src/snipe_rugg/
     sink.py                       # the AlertSink Protocol (business logic <-> discord.py seam)
     embeds.py                     # Discord embed builders (trade/activity/launch/graduation/dev-risk)
   discord_bot/
-    services.py                   # /wallet, /watchlist, /dev, /wallet graph, /strategy, /backtest logic (no discord.py)
+    services.py                   # /wallet, /watchlist, /dev, /wallet graph, /strategy, /backtest, /token logic (no discord.py)
     bot.py                         # app_commands wiring
     alert_sink.py                  # the concrete AlertSink that posts to a channel
   main.py                         # Phase 1 demo entrypoint
-  bot_main.py                      # full Phase 1-8 composition root
+  bot_main.py                      # full Phase 1-9 composition root
 tests/                        # pytest + pytest-asyncio, incl. a real mock WS server
 docs/                          # architecture, roadmap, provider matrix
 ```

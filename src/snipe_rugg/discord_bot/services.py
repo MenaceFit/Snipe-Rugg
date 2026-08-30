@@ -10,6 +10,7 @@ resubscribes.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -25,12 +26,16 @@ from snipe_rugg.db.repository import (
 )
 from snipe_rugg.dev.patterns import assess_dev
 from snipe_rugg.dev.service import DevMonitorService
+from snipe_rugg.discovery.dexscreener import DexScreenerClient
+from snipe_rugg.discovery.trending import find_trending_solana_pairs
 from snipe_rugg.graph.analysis import funded_by, funders_of, shares_a_funder_with
 from snipe_rugg.graph.render import render_bubble_map
 from snipe_rugg.graph.service import GraphService
 from snipe_rugg.providers.base import StreamingProvider
 from snipe_rugg.strategy.models import StrategyConfig
 from snipe_rugg.tracking.wallet_tracker import wallet_subscription_key
+from snipe_rugg.traders.insiders import InsiderSignal
+from snipe_rugg.traders.service import TraderAnalysisService
 
 
 class WalletCommandService:
@@ -286,4 +291,68 @@ class BacktestCommandService:
         ]
         if metrics.avg_hold_seconds is not None:
             lines.append(f"Avg hold time: {metrics.avg_hold_seconds:.0f}s")
+        return "\n".join(lines)
+
+
+def _fmt_sol_price(value: Decimal | None) -> str:
+    return f"{value:.8f} SOL" if value is not None else "n/a"
+
+
+def _fmt_pct(value: Decimal | None) -> str:
+    return f"{value:.0%}" if value is not None else "n/a"
+
+
+class TraderCommandService:
+    """Top-trader / insider discovery (not in the original 154-section spec —
+    added on request): discovers Solana tokens trending on DexScreener, and
+    for a given mint backfills its recent trade history into a top-trader
+    leaderboard with average-cost-basis PnL/win-rate and correlation-based
+    "possible insider" signals. Solana-only — DexScreener is used purely to
+    discover *which* tokens are trending, all transaction analysis reuses
+    this project's own Solana decoder — and always a bounded recent window,
+    never a genuine all-time history (see traders/service.py and
+    traders/backfill.py for exactly what "bounded" means and why)."""
+
+    def __init__(self, *, dexscreener_client: DexScreenerClient, analysis_service: TraderAnalysisService) -> None:
+        self._dexscreener_client = dexscreener_client
+        self._analysis_service = analysis_service
+
+    async def trending(self) -> str:
+        pairs = await find_trending_solana_pairs(self._dexscreener_client)
+        if not pairs:
+            return "No trending Solana pairs found right now."
+
+        lines = ["Trending Solana tokens (by 24h volume):"]
+        for pair in pairs:
+            symbol = pair.base_token.symbol or "?"
+            address = pair.base_token.address or "?"
+            vol = f"${pair.volume.h24:,.0f}" if pair.volume.h24 is not None else "n/a"
+            liq = f"${pair.liquidity.usd:,.0f}" if pair.liquidity.usd is not None else "n/a"
+            lines.append(f"{symbol} — `{address}` — 24h vol: {vol}, liquidity: {liq}")
+        return "\n".join(lines)
+
+    async def traders(self, mint: str) -> str:
+        report = await self._analysis_service.analyze_mint(mint)
+        if report.wallets_analyzed == 0:
+            return f"No trades observed for `{mint}` within the lookup window."
+
+        signals_by_wallet: dict[str, list[InsiderSignal]] = defaultdict(list)
+        for signal in report.insider_signals:
+            signals_by_wallet[signal.wallet].append(signal)
+
+        lines = [f"Top traders for `{mint}` — {report.trades_analyzed} trade(s) across {report.wallets_analyzed} wallet(s)"]
+        if report.creator is not None:
+            lines.append(f"Creator: `{report.creator}` ({report.creator_source})")
+
+        for rank, trader in enumerate(report.top_traders, start=1):
+            lines.append(
+                f"{rank}. `{trader.wallet}` — "
+                f"buys: {trader.buy_count} @ avg {_fmt_sol_price(trader.avg_buy_price_sol)}, "
+                f"sells: {trader.sell_count} @ avg {_fmt_sol_price(trader.avg_sell_price_sol)}, "
+                f"PnL: {trader.realized_pnl_sol:+.4f} SOL, win rate: {_fmt_pct(trader.win_rate)}"
+            )
+            for signal in signals_by_wallet.get(trader.wallet, []):
+                lines.append(f"     ⚠️ [{signal.severity.value}] {signal.label}: {signal.description}")
+
+        lines.append(f"\n{report.window_note}")
         return "\n".join(lines)

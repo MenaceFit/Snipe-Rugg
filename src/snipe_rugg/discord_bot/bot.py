@@ -16,6 +16,7 @@ from snipe_rugg.discord_bot.services import (
     DevCommandService,
     GraphCommandService,
     StrategyCommandService,
+    TraderCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
@@ -140,6 +141,23 @@ class BacktestGroup(app_commands.Group):
         await interaction.followup.send(reply)
 
 
+class TokenGroup(app_commands.Group):
+    def __init__(self, service: TraderCommandService) -> None:
+        super().__init__(name="token", description="Trending Solana tokens and top-trader / possible-insider analysis")
+        self._service = service
+
+    @app_commands.command(name="trending", description="List Solana tokens trending on DexScreener")
+    async def trending(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        await interaction.followup.send(await self._service.trending())
+
+    @app_commands.command(name="traders", description="Top traders, PnL/win-rate, and possible-insider signals for a token")
+    @app_commands.describe(mint="Token mint address")
+    async def traders(self, interaction: discord.Interaction, mint: str) -> None:
+        await interaction.response.defer()
+        await interaction.followup.send(await self._service.traders(mint))
+
+
 class SnipeRuggBot(commands.Bot):
     def __init__(
         self,
@@ -150,6 +168,7 @@ class SnipeRuggBot(commands.Bot):
         graph_service: GraphCommandService,
         strategy_service: StrategyCommandService,
         backtest_service: BacktestCommandService,
+        trader_service: TraderCommandService,
         intents: discord.Intents | None = None,
     ) -> None:
         super().__init__(command_prefix="!", intents=intents or discord.Intents.default())
@@ -159,6 +178,7 @@ class SnipeRuggBot(commands.Bot):
         self._graph_service = graph_service
         self._strategy_service = strategy_service
         self._backtest_service = backtest_service
+        self._trader_service = trader_service
 
     async def setup_hook(self) -> None:
         self.tree.add_command(WalletGroup(self._wallet_service, self._graph_service))
@@ -166,6 +186,7 @@ class SnipeRuggBot(commands.Bot):
         self.tree.add_command(DevGroup(self._dev_service))
         self.tree.add_command(StrategyGroup(self._strategy_service))
         self.tree.add_command(BacktestGroup(self._backtest_service))
+        self.tree.add_command(TokenGroup(self._trader_service))
         await self.tree.sync()
 
 
@@ -177,6 +198,7 @@ def build_bot(
     graph_service: GraphCommandService,
     strategy_service: StrategyCommandService,
     backtest_service: BacktestCommandService,
+    trader_service: TraderCommandService,
     intents: discord.Intents | None = None,
 ) -> SnipeRuggBot:
     return SnipeRuggBot(
@@ -186,5 +208,6 @@ def build_bot(
         graph_service=graph_service,
         strategy_service=strategy_service,
         backtest_service=backtest_service,
+        trader_service=trader_service,
         intents=intents,
     )

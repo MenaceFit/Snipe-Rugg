@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal
 
+import httpx
 import pytest
 from sqlalchemy.pool import StaticPool
 
@@ -11,20 +12,26 @@ from snipe_rugg.core.clock import utc_now
 from snipe_rugg.db.base import create_engine, create_session_factory, init_models
 from snipe_rugg.db.repository import WalletRepository
 from snipe_rugg.decoder.models import EventType, NormalizedActivity, NormalizedTrade
+from snipe_rugg.dev.models import Severity
 from snipe_rugg.dev.service import DevMonitorService
 from snipe_rugg.discord_bot.services import (
     BacktestCommandService,
     DevCommandService,
     GraphCommandService,
     StrategyCommandService,
+    TraderCommandService,
     WalletCommandService,
     WatchlistCommandService,
 )
+from snipe_rugg.discovery.dexscreener import DexScreenerClient
 from snipe_rugg.graph.service import GraphService
 from snipe_rugg.launchpad.models import LaunchEvent
 from snipe_rugg.strategy.engine import StrategyEngine
 from snipe_rugg.strategy.models import StrategyConfig
 from snipe_rugg.tracking.wallet_tracker import wallet_subscription_key
+from snipe_rugg.traders.insiders import InsiderSignal, InsiderSignalKind
+from snipe_rugg.traders.service import TokenAnalysisReport
+from snipe_rugg.traders.stats import TraderStats
 from tests.helpers import FakeStreamingProvider
 
 
@@ -291,3 +298,105 @@ async def test_backtest_run_replays_recorded_history_and_reports_metrics(session
     assert "1 closed position(s)" in reply
     assert "1W / 0L" in reply
     assert "Total PnL: 1.0 SOL" in reply
+
+
+def _dexscreener_client_returning(pairs: list[dict]) -> DexScreenerClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"pairs": pairs})
+
+    transport = httpx.MockTransport(handler)
+    return DexScreenerClient(client=httpx.AsyncClient(base_url="https://example.invalid", transport=transport))
+
+
+class _StubAnalysisService:
+    def __init__(self, report: TokenAnalysisReport) -> None:
+        self._report = report
+
+    async def analyze_mint(self, mint: str) -> TokenAnalysisReport:
+        return self._report
+
+
+def _trader_stats(*, wallet: str) -> TraderStats:
+    return TraderStats(
+        wallet=wallet,
+        mint="Mint111",
+        trade_count=2,
+        buy_count=1,
+        sell_count=1,
+        avg_buy_price_sol=Decimal("0.001"),
+        avg_sell_price_sol=Decimal("0.002"),
+        realized_pnl_sol=Decimal("0.5"),
+        closed_trade_count=1,
+        win_count=1,
+        win_rate=Decimal(1),
+        open_position_tokens=Decimal(0),
+        trades_with_unknown_cost_basis=0,
+        first_trade_slot=1,
+        last_trade_slot=2,
+    )
+
+
+async def test_trending_lists_solana_pairs_with_volume_and_liquidity():
+    client = _dexscreener_client_returning(
+        [
+            {
+                "chainId": "solana",
+                "baseToken": {"symbol": "FOO", "address": "FooMint111"},
+                "liquidity": {"usd": 50_000.0},
+                "volume": {"h24": 12345.0},
+            }
+        ]
+    )
+    service = TraderCommandService(dexscreener_client=client, analysis_service=None)  # type: ignore[arg-type]
+
+    reply = await service.trending()
+
+    assert "FOO" in reply
+    assert "FooMint111" in reply
+    assert "$12,345" in reply
+    assert "$50,000" in reply
+
+
+async def test_trending_reports_when_nothing_is_trending():
+    client = _dexscreener_client_returning([])
+    service = TraderCommandService(dexscreener_client=client, analysis_service=None)  # type: ignore[arg-type]
+
+    reply = await service.trending()
+    assert "No trending" in reply
+
+
+async def test_traders_reports_when_no_trades_observed():
+    report = TokenAnalysisReport(
+        mint="Mint111", creator=None, creator_source="unknown", trades_analyzed=0, wallets_analyzed=0,
+        top_traders=[], insider_signals=[],
+    )
+    service = TraderCommandService(dexscreener_client=None, analysis_service=_StubAnalysisService(report))  # type: ignore[arg-type]
+
+    reply = await service.traders("Mint111")
+    assert "No trades observed" in reply
+
+
+async def test_traders_formats_leaderboard_and_insider_signals():
+    stats = _trader_stats(wallet="Wallet111")
+    signal = InsiderSignal(
+        wallet="Wallet111",
+        kind=InsiderSignalKind.DIRECTLY_FUNDED_BY_CREATOR,
+        severity=Severity.HIGH,
+        label="POSSIBLE INSIDER",
+        description="Received SOL directly from the token's creator (`Creator111`)",
+        related_wallets=["Creator111"],
+    )
+    report = TokenAnalysisReport(
+        mint="Mint111", creator="Creator111", creator_source="tracked", trades_analyzed=2, wallets_analyzed=1,
+        top_traders=[stats], insider_signals=[signal],
+    )
+    service = TraderCommandService(dexscreener_client=None, analysis_service=_StubAnalysisService(report))  # type: ignore[arg-type]
+
+    reply = await service.traders("Mint111")
+
+    assert "Wallet111" in reply
+    assert "Creator111" in reply
+    assert "win rate: 100%" in reply
+    assert "POSSIBLE INSIDER" in reply
+    assert "Received SOL directly from the token's creator" in reply
+    assert "not a complete all-time history" in reply

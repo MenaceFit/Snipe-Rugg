@@ -31,7 +31,7 @@
    accepted through Discord, `.env`, the database, or logs — full stop, not a
    configuration option; see "Safety posture" below.
 
-## Pipeline (as built — all 8 phases)
+## Pipeline (as built — all 8 phases, plus Phase 9 on demand)
 
 ```
 Solana RPC WebSocket ┐
@@ -63,7 +63,13 @@ queue — a second, business-level event bus topic downstream of the first.
 Engine against an isolated copy of the Database instead of the live stream.
 **Phase 8** added the Execution Provider seam between the Strategy Engine
 and anything that actually opens/closes a position — Paper by default,
-Manual and Live built but not wired into `bot_main.py`.
+Manual and Live built but not wired into `bot_main.py`. **Phase 9** added an
+on-demand path outside this diagram entirely: `/token trending` queries
+DexScreener directly, and `/token traders <mint>` triggers a bounded RPC
+backfill (`traders/backfill.py`) through the same Decoder/Classifier the
+streaming pipeline uses — reused, not re-implemented — but invoked
+synchronously from a Discord command rather than subscribed to the event
+bus, since this analysis only ever runs when someone asks for it.
 
 ## Module map (implemented)
 
@@ -195,7 +201,16 @@ Manual and Live built but not wired into `bot_main.py`.
   operations (funder correlation, clustering); `GraphService` is the
   DB-facing orchestrator that expands one address into its funding context;
   `render.py` turns a graph into a PNG bubble map.
-- `bot_main.py` — the full composition root (Phases 1-5) that a real
+- `discovery/dexscreener.py`, `discovery/trending.py` — Phase 9's discovery
+  layer: `DexScreenerClient` wraps DexScreener's public search/tokens
+  endpoints (no API key); `find_trending_solana_pairs()` derives a
+  "trending" view (search broadly, filter to Solana + a liquidity floor,
+  sort by 24h volume) since DexScreener has no dedicated trending endpoint.
+  Used purely for *discovery* — no transaction data ever comes from here.
+- `traders/backfill.py`, `traders/stats.py`, `traders/insiders.py`,
+  `traders/service.py` — Phase 9's top-trader / insider analysis: see
+  "Top-trader / insider discovery" below.
+- `bot_main.py` — the full composition root (Phases 1-9) that a real
   deployment runs.
 
 ## Why balance deltas, not per-program instruction parsing
@@ -249,6 +264,94 @@ PATTERN" Discord alert — it takes corroboration. Labels are deliberately
 "HIGH-RISK REPEATED PATTERN" / "REPEATED PATTERN — WATCH", never "rugger",
 "scam", or "fraud" — this project observes and reports patterns, it doesn't
 adjudicate intent.
+
+## Top-trader / insider discovery (Phase 9)
+
+Added on request, after the original 154-section spec: study transactions
+on tokens trending on DexScreener, surface each top trader's buy/sell price
+and win rate, and flag possible side wallets/insiders. Two scope questions
+came up immediately and were resolved with the user before building rather
+than guessed:
+
+**Solana only, not multi-chain.** DexScreener covers many chains, but this
+project's entire decoding engine (`decoder/`, `providers/`) is Solana-only —
+supporting another chain would mean a second decoder built against that
+chain's own RPC shape, a genuinely separate phase of work. DexScreener is
+used exclusively as a *discovery* source (`discovery/trending.py`: which
+Solana tokens are trending right now) — every transaction this feature
+analyzes is fetched and decoded through this project's existing, already-
+tested Solana RPC/decoder/classifier stack, completely unmodified.
+
+**A bounded recent window, never true all-time.** A wallet's full on-chain
+history can be thousands of transactions; backfilling and classifying all of
+it for every top trader of every trending token doesn't scale as a
+Discord-command-triggered operation. `traders/backfill.py` fetches at most
+`limit` recent signatures per address (`DEFAULT_MINT_BACKFILL_LIMIT = 300`
+for a mint, `DEFAULT_WALLET_FUNDER_BACKFILL_LIMIT = 50` per wallet) via
+`getSignaturesForAddress`, and every report carries `TokenAnalysisReport
+.window_note` verbatim so nothing downstream can present this as a genuine
+all-time history by omission — "over the last N observed transactions,"
+never "all-time," anywhere in this codebase.
+
+**Mint-wide trade classification is the one new decoding idea.**
+Everywhere else in this codebase, `classify(tx, wallet)` is called for a
+wallet the user already tracks. `backfill_mint_trades()` calls
+`classify(tx, tx.signer)` instead — classifying each transaction from its
+own signer's perspective — which is what makes "top traders of a token
+nobody explicitly tracks" possible at all. No decoder/classifier logic
+changed to support this; it was already general enough.
+
+**Average-cost-basis, not FIFO/LIFO**, for `traders/stats.py`'s per-wallet
+PnL and win rate — the simplest methodology that stays correct without
+tracking individual buy lots, chosen because retail traders overwhelmingly
+build and unwind one position on a token rather than running disjoint FIFO
+lots. A SELL whose matching BUY happened before the backfill window has no
+known cost basis; rather than guess one, that portion is excluded from
+realized PnL/win-rate and counted in `trades_with_unknown_cost_basis` so a
+report is never more confident than the observed window supports.
+
+**Insider signals are correlations, never a verdict** — the same spec
+section 62 discipline `dev/patterns.py` already applies to dev-risk
+patterns, reused here for a different signal type. `traders/insiders.py`
+builds a fresh, in-memory funding graph from `traders/backfill.py`'s own
+`backfill_wallet_funders()` results (not this bot's persisted
+`WalletActivity` rows — the whole point is reasoning about wallets nobody
+has tracked before) and reuses `graph/analysis.py`'s funder-correlation
+functions (`funders_of`, `shares_a_funder_with`, `funder_clusters`)
+completely unmodified. Every signal is labeled "POSSIBLE INSIDER" or
+"POSSIBLE SIDE WALLET" — a shared SOL funding source is real, observable
+information, but two wallets independently aping into the same trending
+token is not flagged, and nothing here ever claims to have confirmed a
+wallet belongs to a token's team.
+
+**Creator resolution is DB-first, then a capped fallback.** The
+`SHARED_FUNDER_WITH_CREATOR`/`DIRECTLY_FUNDED_BY_CREATOR` signals need the
+token's creator address, which this bot may never have observed (a trending
+token discovered via DexScreener was not necessarily ever tracked through
+`launchpad/monitor.py`). `TraderAnalysisService._resolve_creator()` checks
+this bot's own `tokens` table first (free, instant, for anything this bot's
+own Launch Monitor already saw); only when that misses does it fall back to
+`_find_creator_via_rpc()`, which walks the mint's own signature history
+backwards looking for the transaction that actually created it
+(`launchpad/detector.py`'s `detect_launch()`) — capped at
+`MAX_CREATOR_LOOKUP_PAGES` (3) pages of `CREATOR_LOOKUP_PAGE_SIZE` (1000)
+signatures each. A mint old/active enough that its creation transaction
+falls outside that cap degrades to `creator=None` /
+`creator_source="unknown"` — the creator-correlated signals just don't fire
+for that token, rather than paying for an unbounded historical walk that
+would break this feature's own bounded-window scope.
+
+**Not validated against a live HTTP response.** Unlike every Solana program
+ID and RPC shape elsewhere in this codebase, `discovery/dexscreener.py`'s
+field schema could not be confirmed against a real `api.dexscreener.com`
+response — both that domain and `docs.dexscreener.com` are unreachable from
+this project's development sandbox (confirmed via direct `curl`, not
+assumed). The schema was cross-referenced from two independent secondary
+sources instead, and every field on `DexPair` is `Optional` with
+`extra="ignore"` parsing so a live schema mismatch degrades gracefully
+rather than crashing the bot — but this is a documented gap, not a verified
+integration, and should be smoke-tested against the real API before
+production use.
 
 ## Why entries don't snipe at launch (spec section 101 applied to strategy)
 
